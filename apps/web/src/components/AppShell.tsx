@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { NavLink, useLocation } from "react-router";
 import { BackupModal } from "./BackupModal";
 import { Select } from "./Select";
-import { downloadBackup, ensureYear, MONTHS_FULL, normalizeStore, years } from "@/lib/domain";
+import { downloadBackup, ensureYear, mergeSharedFunds, MONTHS_FULL, normalizeStore, privateLedger, years } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
 
 const pageCopy = {
@@ -26,6 +26,7 @@ export function AppShell({ children }: PropsWithChildren) {
   const copy = pageCopy[page] ?? pageCopy.expenses;
   const user = useFinanceStore((state) => state.user);
   const ledger = useFinanceStore((state) => state.ledger);
+  const sharedFunds = useFinanceStore((state) => state.sharedFunds);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
   const saveState = useFinanceStore((state) => state.saveState);
@@ -74,6 +75,7 @@ export function AppShell({ children }: PropsWithChildren) {
       const normalized = normalizeStore(parsed);
       if (!window.confirm("Nhập dữ liệu này sẽ THAY THẾ toàn bộ số liệu hiện tại. Tiếp tục?")) return;
       const now = new Date();
+      mergeSharedFunds(normalized.store, Object.values(sharedFunds));
       ensureYear(normalized.store, now.getFullYear());
       replaceLedger(normalized.store);
       setPeriod(now.getFullYear(), now.getMonth());
@@ -160,7 +162,7 @@ export function AppShell({ children }: PropsWithChildren) {
             </div>
           ) : null}
           <span className="spacer" />
-          <button className="btn sm" type="button" onClick={() => setBackup(downloadBackup(ledger))}>⬇ Xuất sao lưu</button>
+          <button className="btn sm" type="button" onClick={() => setBackup(downloadBackup(privateLedger(ledger)))}>⬇ Xuất sao lưu</button>
           <button className="btn sm" type="button" onClick={() => inputRef.current?.click()}>⬆ Nhập sao lưu</button>
           <input
             ref={inputRef}
@@ -182,7 +184,7 @@ export function AppShell({ children }: PropsWithChildren) {
       </main>
 
       <footer className="site-footer">
-        Dữ liệu lưu trong file <code>data.json</code> trên server. Nên xuất sao lưu định kỳ để giữ bản dự phòng.
+        Dữ liệu lưu trong file <code>data.json</code> trên server. Sao lưu chỉ gồm dữ liệu cá nhân; quỹ chung được quản lý trên server.
       </footer>
 
       {backup ? <BackupModal {...backup} onClose={() => setBackup(null)} /> : null}

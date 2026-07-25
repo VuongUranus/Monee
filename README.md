@@ -2,6 +2,10 @@
 
 Ứng dụng theo dõi quỹ, thu chi và tài sản cá nhân. Fastify phục vụ API và bundle React SPA trên cùng origin; dữ liệu vẫn được lưu trong `data.json` tại root.
 
+## Chia sẻ quỹ
+
+Trong **Quỹ → Quản lý quỹ**, chủ quỹ có thể chia sẻ từng quỹ với một email Google đã từng đăng nhập ứng dụng. Quyền **Chỉ xem** chỉ cho phép đọc, còn **Chỉnh sửa** cho phép sửa nội dung và cấu trúc quỹ. Chỉ chủ quỹ được quản lý thành viên hoặc xóa quỹ. Quỹ được mời không ảnh hưởng tới thu chi và báo cáo cá nhân của người nhận; sao lưu cũng chỉ gồm dữ liệu cá nhân.
+
 ## Yêu cầu
 
 - Node.js `>=20.19`

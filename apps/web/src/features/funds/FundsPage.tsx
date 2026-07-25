@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { CryptoMatch, Fund, FundCategory, FundDetail, GoldDetail, GoldLot, HoldingDetail, HoldingLot } from "@chi-tieu/shared";
+import type { CryptoMatch, Fund, FundCategory, FundDetail, GoldDetail, GoldLot, HoldingDetail, HoldingLot, SharedFundRole } from "@chi-tieu/shared";
 import { api } from "@/lib/api";
 import { DonutChart } from "@/components/Charts";
 import { Modal } from "@/components/Modal";
@@ -36,9 +36,13 @@ export function FundsPage() {
   const marketMessage = useFinanceStore((state) => state.marketMessage);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
   const refreshMarket = useFinanceStore((state) => state.refreshMarket);
+  const sharedFunds = useFinanceStore((state) => state.sharedFunds);
   const [scope, setScope] = useState<"year" | "all">("year");
   const [managing, setManaging] = useState(false);
   const [detailFundId, setDetailFundId] = useState<string | null>(null);
+  const [shareFundId, setShareFundId] = useState<string | null>(null);
+  const [contributionFundId, setContributionFundId] = useState<string | null>(null);
+  const contributionMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
 
   const yearData = ledger.years[String(year)]!;
   const income = totalIncomeForMonth(ledger, year, month);
@@ -64,7 +68,7 @@ export function FundsPage() {
     if (!window.confirm(`Xóa toàn bộ phân bổ quỹ và ghi chú của ${MONTHS_FULL[month]} / ${year}?`)) return;
     updateLedger((draft) => {
       const target = draft.years[String(year)]!;
-      for (const fund of draft.funds) {
+      for (const fund of draft.funds.filter((item) => item.sharing?.role !== "viewer")) {
         target.funds[fund.id]![month] = 0;
         target.details[fund.id]![month] = null;
       }
@@ -118,16 +122,18 @@ export function FundsPage() {
           <p className="hint">Có thể nhập phép tính như <code>5tr+500k</code> bằng số đầy đủ, ví dụ <code>5000000+500000</code>.</p>
           <div className="table-scroll">
             <table>
-              <thead><tr><th>Quỹ</th><th>Tháng này</th><th>% thu</th><th>Lũy kế năm</th></tr></thead>
+              <thead><tr><th>Quỹ</th><th>Tháng này</th><th>Thành viên gửi</th><th>% thu</th><th>Lũy kế năm</th></tr></thead>
               <tbody>
                 {ledger.funds.map((fund) => {
                   const value = yearData.funds[fund.id]?.[month] ?? 0;
                   const category = fundCategory(fund);
+                  const contributions = sharedFunds[fund.id]?.content.contributions?.[contributionMonth] ?? [];
+                  const contributed = contributions.reduce((sum, item) => sum + item.amount, 0);
                   return (
                     <tr key={fund.id}>
                       <td><span className="fund-tag" style={{ background: fund.color }} />{fund.name}<small className="table-meta">{FUND_CATEGORIES[category].short}</small></td>
                       <td>
-                        {category === "saving" ? (
+                        {category === "saving" && fund.sharing?.role !== "viewer" ? (
                           <MoneyInput
                             value={value}
                             ariaLabel={`Số tiền ${fund.name}`}
@@ -135,19 +141,20 @@ export function FundsPage() {
                               draft.years[String(year)]!.funds[fund.id]![month] = amount;
                             })}
                           />
-                        ) : (
+                        ) : category === "saving" ? <strong>{fmt(value)}</strong> : (
                           <button className="computed-button" type="button" onClick={() => setDetailFundId(fund.id)}>
                             <strong>{fmt(value)}</strong><small>Chỉnh chi tiết</small>
                           </button>
                         )}
                       </td>
+                      <td>{fund.sharing ? <button className="computed-button" type="button" onClick={() => setContributionFundId(fund.id)}><strong>{fmt(contributed)}</strong><small>{contributions.length ? `${contributions.length} khoản` : "Ghi nhận"}</small></button> : "—"}</td>
                       <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
                       <td>{fmt(yearToDateFund(ledger, year, fund.id))}</td>
                     </tr>
                   );
                 })}
               </tbody>
-              <tfoot><tr><td>Tổng cộng</td><td>{fmt(total)}</td><td>{income ? `${Math.round(total / income * 100)}%` : "0%"}</td><td>{fmt(totalYtd)}</td></tr></tfoot>
+              <tfoot><tr><td>Tổng cộng</td><td>{fmt(total)}</td><td>—</td><td>{income ? `${Math.round(total / income * 100)}%` : "0%"}</td><td>{fmt(totalYtd)}</td></tr></tfoot>
             </table>
           </div>
           <label className="field-block">
@@ -204,8 +211,10 @@ export function FundsPage() {
       </div>
 
       {ledger.showGoals ? <GoalsTable /> : null}
-      {managing ? <FundManager onClose={() => setManaging(false)} /> : null}
+      {managing ? <FundManager onClose={() => setManaging(false)} onShare={setShareFundId} /> : null}
       {detailFundId ? <FundDetailEditor fundId={detailFundId} onClose={() => setDetailFundId(null)} /> : null}
+      {shareFundId ? <ShareFundModal fundId={shareFundId} onClose={() => setShareFundId(null)} /> : null}
+      {contributionFundId ? <ContributionModal fundId={contributionFundId} month={contributionMonth} onClose={() => setContributionFundId(null)} /> : null}
     </section>
   );
 }
@@ -250,15 +259,15 @@ function GoalsTable() {
               return (
                 <tr key={fund.id}>
                   <td><span className="fund-tag" style={{ background: fund.color }} />{fund.name}</td>
-                  <td><MoneyInput value={yearGoal} onCommit={(value) => updateLedger((draft) => {
+                  <td>{fund.sharing?.role === "viewer" ? (yearGoal ? fmt(yearGoal) : "—") : <MoneyInput value={yearGoal} onCommit={(value) => updateLedger((draft) => {
                     const target = getGoal(draft as any, fund.id);
                     if (value > 0) target.years[String(year)] = value;
                     else delete target.years[String(year)];
-                  })} /></td>
+                  })} />}</td>
                   <td>{fmt(ytd)}</td>
                   <td><Progress value={ytd} goal={yearGoal} color={fund.color} /></td>
                   <td className="need-cell">{yearGoal ? (remaining ? <>{fmt(need)}<small>còn thiếu {fmtShort(remaining)}</small></> : <span className="ok">✓ đã đạt</span>) : <span className="goal-cell">chưa đặt</span>}</td>
-                  <td><MoneyInput value={goal.all} onCommit={(value) => updateLedger((draft) => { getGoal(draft as any, fund.id).all = value; })} /></td>
+                  <td>{fund.sharing?.role === "viewer" ? (goal.all ? fmt(goal.all) : "—") : <MoneyInput value={goal.all} onCommit={(value) => updateLedger((draft) => { getGoal(draft as any, fund.id).all = value; })} />}</td>
                   <td>{fmt(all)}</td>
                   <td><Progress value={all} goal={goal.all} color={fund.color} /></td>
                 </tr>
@@ -285,9 +294,10 @@ function Progress({ value, goal, color }: { value: number; goal: number; color: 
   return <>{progress.toFixed(0)}%<div className="bar"><span style={{ width: `${progress}%`, background: color }} /></div></>;
 }
 
-function FundManager({ onClose }: { onClose(): void }) {
+function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: string): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
+  const bootstrap = useFinanceStore((state) => state.bootstrap);
   const [name, setName] = useState("");
   const [color, setColor] = useState(PALETTE[0]!);
   const [category, setCategory] = useState<FundCategory>("saving");
@@ -310,8 +320,14 @@ function FundManager({ onClose }: { onClose(): void }) {
     setName("");
   };
 
-  const remove = (fund: Fund): void => {
+  const remove = async (fund: Fund): Promise<void> => {
     if (ledger.funds.length <= 1 || !window.confirm(`Xóa quỹ “${fund.name}” cùng toàn bộ dữ liệu của quỹ?`)) return;
+    if (fund.sharing) {
+      if (fund.sharing.role !== "owner") return;
+      await api.deleteSharedFund(fund.id);
+      await bootstrap();
+      return;
+    }
     updateLedger((draft) => {
       draft.funds = draft.funds.filter((item) => item.id !== fund.id);
       for (const data of Object.values(draft.years)) {
@@ -339,18 +355,20 @@ function FundManager({ onClose }: { onClose(): void }) {
         {ledger.funds.map((fund, index) => (
           <div className="manager-row" key={fund.id}>
             <div className="reorder-actions">
-              <button type="button" aria-label={`Đưa ${fund.name} lên`} disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
-              <button type="button" aria-label={`Đưa ${fund.name} xuống`} disabled={index === ledger.funds.length - 1} onClick={() => move(index, 1)}>↓</button>
+              <button type="button" aria-label={`Đưa ${fund.name} lên`} disabled={index === 0 || fund.sharing?.role === "viewer"} onClick={() => move(index, -1)}>↑</button>
+              <button type="button" aria-label={`Đưa ${fund.name} xuống`} disabled={index === ledger.funds.length - 1 || fund.sharing?.role === "viewer"} onClick={() => move(index, 1)}>↓</button>
             </div>
-            <input type="color" value={fund.color} aria-label={`Màu ${fund.name}`} onChange={(event) => updateLedger((draft) => { draft.funds[index]!.color = event.target.value; })} />
-            <input value={fund.name} aria-label={`Tên ${fund.name}`} onChange={(event) => updateLedger((draft) => { draft.funds[index]!.name = event.target.value; }, false)} onBlur={() => updateLedger(() => undefined)} />
+            <input disabled={fund.sharing?.role === "viewer"} type="color" value={fund.color} aria-label={`Màu ${fund.name}`} onChange={(event) => updateLedger((draft) => { draft.funds[index]!.color = event.target.value; })} />
+            <input disabled={fund.sharing?.role === "viewer"} value={fund.name} aria-label={`Tên ${fund.name}`} onChange={(event) => updateLedger((draft) => { draft.funds[index]!.name = event.target.value; }, false)} onBlur={() => updateLedger(() => undefined)} />
             <Select<FundCategory>
               value={fund.cat}
               options={Object.entries(FUND_CATEGORIES).map(([id, item]) => ({ value: id as FundCategory, label: item.short }))}
-              onValueChange={(cat) => updateLedger((draft) => { draft.funds[index]!.cat = cat; })}
+              onValueChange={(cat) => { if (fund.sharing?.role !== "viewer") updateLedger((draft) => { draft.funds[index]!.cat = cat; }); }}
               ariaLabel={`Loại quỹ ${fund.name}`}
             />
-            <button className="btn sm danger" type="button" disabled={ledger.funds.length <= 1} onClick={() => remove(fund)}>Xóa</button>
+            <small>{fund.sharing ? (fund.sharing.role === "owner" ? "Đang chia sẻ" : `Chia sẻ bởi ${fund.sharing.ownerName}`) : "Cá nhân"}</small>
+            {(!fund.sharing || fund.sharing.role === "owner") ? <button className="btn sm" type="button" onClick={() => onShare(fund.id)}>{fund.sharing ? "Thành viên" : "Chia sẻ"}</button> : null}
+            <button className="btn sm danger" type="button" disabled={ledger.funds.length <= 1 || (fund.sharing?.role !== undefined && fund.sharing.role !== "owner")} onClick={() => void remove(fund)}>Xóa</button>
           </div>
         ))}
       </div>
@@ -369,12 +387,104 @@ function FundManager({ onClose }: { onClose(): void }) {
   );
 }
 
+function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }) {
+  const ledger = useFinanceStore((state) => state.ledger);
+  const sharedFunds = useFinanceStore((state) => state.sharedFunds);
+  const bootstrap = useFinanceStore((state) => state.bootstrap);
+  const fund = ledger.funds.find((item) => item.id === fundId)!;
+  const shared = sharedFunds[fundId];
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<SharedFundRole>("viewer");
+  const [message, setMessage] = useState("");
+
+  const addMember = async (): Promise<void> => {
+    if (!email.trim()) return;
+    setMessage("Đang cập nhật…");
+    try {
+      if (shared) await api.setSharedFundMember(fundId, email, role);
+      else await api.createSharedFund(fundId, email, role);
+      await bootstrap();
+      if (!shared) { onClose(); return; }
+      setEmail("");
+      setMessage("Đã cấp quyền truy cập.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không thể cấp quyền.");
+    }
+  };
+
+  const removeMember = async (memberId: string): Promise<void> => {
+    if (!shared || !window.confirm("Thu hồi quyền của thành viên này?")) return;
+    try {
+      await api.removeSharedFundMember(fundId, memberId);
+      await bootstrap();
+      setMessage("Đã thu hồi quyền truy cập.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không thể thu hồi quyền.");
+    }
+  };
+
+  return (
+    <Modal title={`Chia sẻ quỹ — ${fund.name}`} onClose={onClose} footer={<button className="btn" type="button" onClick={onClose}>Đóng</button>}>
+      <p className="hint">Chỉ mời được email Google đã từng đăng nhập ứng dụng. Thành viên xem được toàn bộ dữ liệu của quỹ, không xem thu chi cá nhân.</p>
+      <div className="manager-add">
+        <input type="email" value={email} placeholder="email@example.com" aria-label="Email thành viên" onChange={(event) => setEmail(event.target.value)} />
+        <Select<SharedFundRole> value={role} options={[{ value: "viewer", label: "Chỉ xem" }, { value: "editor", label: "Chỉnh sửa" }]} onValueChange={setRole} ariaLabel="Quyền thành viên" />
+        <button className="btn primary" type="button" disabled={!email.trim()} onClick={() => void addMember()}>{shared ? "Cấp quyền" : "Bắt đầu chia sẻ"}</button>
+      </div>
+      {message ? <p className="hint">{message}</p> : null}
+      {shared?.members?.length ? <div className="manager-list">
+        {shared.members.map((member) => <div className="manager-row" key={member.user.sub}>
+          <span>{member.user.name || member.user.email}<small>{member.user.email}</small></span>
+          <span>{member.role === "editor" ? "Chỉnh sửa" : "Chỉ xem"}</span>
+          <button className="btn sm danger" type="button" onClick={() => void removeMember(member.user.sub)}>Thu hồi</button>
+        </div>)}
+      </div> : shared ? <p className="hint">Chưa có thành viên nào.</p> : null}
+    </Modal>
+  );
+}
+
+function ContributionModal({ fundId, month, onClose }: { fundId: string; month: string; onClose(): void }) {
+  const ledger = useFinanceStore((state) => state.ledger);
+  const user = useFinanceStore((state) => state.user);
+  const sharedFunds = useFinanceStore((state) => state.sharedFunds);
+  const bootstrap = useFinanceStore((state) => state.bootstrap);
+  const fund = ledger.funds.find((item) => item.id === fundId)!;
+  const shared = sharedFunds[fundId]!;
+  const [amount, setAmount] = useState(0);
+  const [note, setNote] = useState("");
+  const [message, setMessage] = useState("");
+  const entries = shared.content.contributions?.[month] ?? [];
+  const canContribute = shared.role !== "viewer";
+
+  const add = async (): Promise<void> => {
+    if (!(amount > 0)) return;
+    try {
+      await api.addSharedFundContribution(fundId, month, amount, note);
+      await bootstrap();
+      setAmount(0);
+      setNote("");
+      setMessage("Đã ghi nhận khoản gửi của bạn.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Không thể ghi nhận khoản gửi."); }
+  };
+
+  return <Modal title={`Thành viên gửi vào ${fund.name} — ${month}`} onClose={onClose} footer={<button className="btn" type="button" onClick={onClose}>Đóng</button>}>
+    <p className="hint">Tổng thành viên gửi: <b>{fmt(entries.reduce((sum, entry) => sum + entry.amount, 0))}</b></p>
+    {entries.length ? <div className="manager-list">{entries.map((entry) => {
+      const profile = shared.contributors[entry.memberId];
+      return <div className="manager-row" key={entry.id}><span>{profile?.name || profile?.email || "Thành viên"}{entry.memberId === user?.sub ? " (bạn)" : ""}<small>{new Date(entry.createdAt).toLocaleString("vi-VN")}{entry.note ? ` · ${entry.note}` : ""}</small></span><strong>{fmt(entry.amount)}</strong></div>;
+    })}</div> : <p className="hint">Chưa có khoản gửi nào trong tháng này.</p>}
+    {canContribute ? <div className="manager-add"><MoneyInput value={amount} allowZero={false} ariaLabel="Số tiền gửi vào quỹ" onCommit={setAmount} /><input value={note} placeholder="Ghi chú (không bắt buộc)" aria-label="Ghi chú khoản gửi" onChange={(event) => setNote(event.target.value)} /><button className="btn primary" type="button" disabled={!amount} onClick={() => void add()}>+ Ghi nhận tiền gửi</button></div> : <p className="hint">Bạn có quyền xem nên không thể ghi nhận khoản gửi.</p>}
+    {message ? <p className="hint">{message}</p> : null}
+  </Modal>;
+}
+
 function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
   const fund = ledger.funds.find((item) => item.id === fundId)!;
+  const readOnly = fund.sharing?.role === "viewer";
   const category = fundCategory(fund);
   const existing = ledger.years[String(year)]!.details[fundId]?.[month] ?? null;
   const [detail, setDetail] = useState<FundDetail>(() => {
@@ -480,8 +590,8 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   };
 
   return (
-    <Modal title={`${fund.name} — ${MONTHS_FULL[month]} / ${year}`} onClose={onClose} wide footer={<><button className="btn" type="button" onClick={onClose}>Đóng</button><button className="btn primary" type="button" onClick={save}>Lưu</button></>}>
-      <div className={`asset-editor asset-editor-${category}`}>
+    <Modal title={`${fund.name} — ${MONTHS_FULL[month]} / ${year}`} onClose={onClose} wide footer={<><button className="btn" type="button" onClick={onClose}>Đóng</button>{!readOnly ? <button className="btn primary" type="button" onClick={save}>Lưu</button> : null}</>}>
+      <fieldset disabled={readOnly} className={`asset-editor asset-editor-${category}`}>
         <div className="asset-editor-intro">
           <span className="asset-kind">{category === "gold" ? "Vàng" : category === "stock" ? "Cổ phiếu" : "Crypto"}</span>
           <div><b>Giá thị trường</b><span>{quoteLabel}</span></div>
@@ -534,7 +644,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
         </div>
         <button className="btn sm asset-add" type="button" onClick={() => gold ? setDetail({ ...gold, lots: [...gold.lots, defaultGoldLot()] }) : holding ? setDetail({ ...holding, lots: [...holding.lots, defaultHoldingLot()] }) : undefined}>+ Thêm giao dịch</button>
         <p className="hint">Giá tự động được ưu tiên; giá thị trường thủ công là phương án dự phòng khi nguồn chưa có dữ liệu. Phí chỉ dùng để tính vốn và lãi/lỗ.</p>
-      </div>
+      </fieldset>
     </Modal>
   );
 }

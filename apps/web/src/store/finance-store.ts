@@ -1,15 +1,19 @@
-import type { FinanceStore, UserProfile } from "@chi-tieu/shared";
+import type { FinanceStore, SharedFundView, UserProfile } from "@chi-tieu/shared";
 import type { Draft } from "immer";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { api, UnauthorizedError } from "@/lib/api";
+import { api, ApiRequestError, UnauthorizedError } from "@/lib/api";
+import type { StatisticsScope } from "@/lib/domain";
 import {
   collectMarketAssets,
   createDefaultStore,
   ensureYear,
+  mergeSharedFunds,
+  privateLedger,
   mergeMarketResponse,
   normalizeStore,
   recalculateMarketFunds,
+  sharedFundContent,
 } from "@/lib/domain";
 
 export type AuthState = "checking" | "anonymous" | "authenticated" | "error";
@@ -20,10 +24,11 @@ interface FinanceState {
   authMessage: string;
   user: UserProfile | null;
   ledger: FinanceStore;
+  sharedFunds: Record<string, SharedFundView>;
   loaded: boolean;
   selectedYear: number;
   selectedMonth: number;
-  statisticsScope: number | "all";
+  statisticsScope: StatisticsScope;
   saveState: SaveState;
   saveMessage: string;
   marketState: "idle" | "loading" | "error";
@@ -32,7 +37,7 @@ interface FinanceState {
   beginLogin(): void;
   logout(): Promise<void>;
   setPeriod(year: number, month: number): void;
-  setStatisticsScope(scope: number | "all"): void;
+  setStatisticsScope(scope: StatisticsScope): void;
   updateLedger(recipe: (draft: Draft<FinanceStore>) => void, persist?: boolean): void;
   replaceLedger(ledger: FinanceStore, persist?: boolean): void;
   refreshMarket(force?: boolean): Promise<void>;
@@ -63,7 +68,18 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       state.saveState = "saving";
       state.saveMessage = "Đang lưu dữ liệu…";
     });
-    const operation = writeQueue.then(() => api.saveData(snapshot as unknown as Record<string, unknown>));
+    const operation = writeQueue.then(async () => {
+      await api.saveData(privateLedger(snapshot) as unknown as Record<string, unknown>);
+      const currentShared = get().sharedFunds;
+      for (const fund of snapshot.funds.filter((item) => item.sharing && item.sharing.role !== "viewer")) {
+        const source = currentShared[fund.id];
+        if (!source) continue;
+        const content = sharedFundContent(snapshot, fund.id);
+        if (JSON.stringify(content) === JSON.stringify(source.content)) continue;
+        const saved = await api.saveSharedFund(fund.id, source.revision, content);
+        set((state) => { state.sharedFunds[fund.id] = saved; });
+      }
+    });
     writeQueue = operation.catch(() => undefined);
     void operation.then(() => {
       if (version === writeVersion) {
@@ -75,6 +91,11 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     }).catch((error: unknown) => {
       if (error instanceof UnauthorizedError) {
         markUnauthorized();
+        return;
+      }
+      if (error instanceof ApiRequestError && error.code === "shared_fund_conflict") {
+        set((state) => { state.saveState = "error"; state.saveMessage = "Quỹ chung đã thay đổi. Đang tải lại dữ liệu…"; });
+        void get().bootstrap();
         return;
       }
       if (version === writeVersion) {
@@ -91,10 +112,11 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     authMessage: "",
     user: null,
     ledger: createDefaultStore(),
+    sharedFunds: {},
     loaded: false,
     selectedYear: currentPeriod().year,
     selectedMonth: currentPeriod().month,
-    statisticsScope: currentPeriod().year,
+    statisticsScope: { mode: "year", year: currentPeriod().year },
     saveState: "loading",
     saveMessage: "Đang tải dữ liệu…",
     marketState: "idle",
@@ -107,18 +129,23 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       });
       try {
         const { user } = await api.me();
-        const payload = await api.loadData();
+        const workspace = await api.loadData();
+        // Keeps older local/mock API responses usable while the server migrates to workspace responses.
+        const payload = "data" in (workspace as any) ? workspace.data : workspace as unknown as Record<string, unknown>;
+        const sharedFunds = "sharedFunds" in (workspace as any) ? workspace.sharedFunds : [];
         const normalized = normalizeStore(payload);
+        mergeSharedFunds(normalized.store, sharedFunds);
         const period = currentPeriod();
         const createdYear = ensureYear(normalized.store, period.year);
         set((state) => {
           state.user = user;
           state.auth = "authenticated";
           state.ledger = normalized.store;
+          state.sharedFunds = Object.fromEntries(sharedFunds.map((fund: SharedFundView) => [fund.id, fund]));
           state.loaded = true;
           state.selectedYear = period.year;
           state.selectedMonth = period.month;
-          state.statisticsScope = period.year;
+          state.statisticsScope = { mode: "year", year: period.year };
           state.saveState = "saved";
           state.saveMessage = "Đã tải data.json.";
         });
@@ -159,6 +186,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           state.user = null;
           state.loaded = false;
           state.ledger = createDefaultStore();
+          state.sharedFunds = {};
         });
       }
     },
@@ -169,7 +197,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
         created = ensureYear(state.ledger, year);
         state.selectedYear = year;
         state.selectedMonth = Math.max(0, Math.min(11, month));
-        if (state.statisticsScope !== "all") state.statisticsScope = year;
+        if (state.statisticsScope.mode === "year") state.statisticsScope = { mode: "year", year };
       });
       if (created) persist(get().ledger);
     },

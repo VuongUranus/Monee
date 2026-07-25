@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { MarketQuotesResponse } from "@chi-tieu/shared";
+import type { MarketQuotesResponse, SharedFundView } from "@chi-tieu/shared";
 import {
   collectMarketAssets,
+  accountForTransaction,
+  accountTypeForAccount,
   createDefaultStore,
   ensureYear,
   evaluateMoneyExpression,
@@ -9,9 +11,15 @@ import {
   goldLotPriceVnd,
   holdingCostVnd,
   mergeMarketResponse,
+  mergeSharedFunds,
   normalizeStore,
+  privateLedger,
   recalculateMarketFunds,
+  expenseByAccount,
+  savingRate,
+  statisticsMonths,
   totalFundsForMonth,
+  countsInPersonalReports,
 } from "./domain";
 
 describe("nghiệp vụ sổ tài chính", () => {
@@ -29,6 +37,57 @@ describe("nghiệp vụ sổ tài chính", () => {
     });
     expect(normalized.store.years["2026"]?.funds.saving).toHaveLength(12);
     expect(normalized.store.expense.cats.length).toBeGreaterThan(0);
+  });
+
+  it("bổ sung tài khoản mặc định cho dữ liệu cũ và giữ giao dịch chưa gán", () => {
+    const normalized = normalizeStore({
+      funds: [{ id: "saving", name: "Tiết kiệm", color: "#123456", cat: "saving" }],
+      years: { "2026": { income: new Array(12).fill(0), funds: { saving: new Array(12).fill(0) } } },
+      expense: { cats: [], incomeCats: [], txns: [{ id: "old", date: "2026-01-01", type: "expense", cat: "food", amount: 10, note: "Cũ" }] },
+    });
+    expect(normalized.needsSave).toBe(true);
+    expect(normalized.store.expense.accountTypes.map((type) => type.name)).toEqual(["Ngân hàng", "Tiền mặt", "Thẻ tín dụng"]);
+    expect(normalized.store.expense.accounts).toContainEqual({ id: "cash", name: "Tiền mặt", typeId: "cash" });
+    expect(normalized.store.expense.txns[0]?.accountId).toBeUndefined();
+  });
+
+  it("tra cứu tài khoản và loại trả về rỗng khi bản ghi đã bị xóa", () => {
+    const store = createDefaultStore();
+    const cash = store.expense.accounts[0]!;
+    expect(accountForTransaction(store, { accountId: cash.id })).toEqual(cash);
+    expect(accountTypeForAccount(store, cash)?.name).toBe("Tiền mặt");
+    store.expense.accounts = [];
+    store.expense.accountTypes = [];
+    expect(accountForTransaction(store, { accountId: cash.id })).toBeUndefined();
+    expect(accountTypeForAccount(store, cash)).toBeUndefined();
+  });
+
+  it("dựng đúng các tháng thống kê theo năm, tháng và khoảng tháng", () => {
+    const store = createDefaultStore();
+    expect(statisticsMonths(store, { mode: "year", year: 2026 })).toHaveLength(12);
+    expect(statisticsMonths(store, { mode: "month", month: "2026-07" })).toEqual([{ year: 2026, month: 6, key: "2026-07" }]);
+    expect(statisticsMonths(store, { mode: "range", from: "2025-12", to: "2026-02" }).map((item) => item.key)).toEqual(["2025-12", "2026-01", "2026-02"]);
+    expect(statisticsMonths(store, { mode: "range", from: "2026-03", to: "2026-02" })).toEqual([]);
+  });
+
+  it("tính tỷ lệ tiết kiệm và gom chi tiêu theo tài khoản", () => {
+    const store = createDefaultStore();
+    store.expense.accounts.push({ id: "bank", name: "VCB", typeId: "bank" });
+    store.expense.txns = [
+      { id: "cash", date: "2026-01-01", type: "expense", cat: "food", accountId: "cash", amount: 100, note: "" },
+      { id: "bank", date: "2026-01-02", type: "expense", cat: "food", accountId: "bank", amount: 200, note: "" },
+      { id: "unknown", date: "2026-01-03", type: "expense", cat: "food", amount: 50, note: "" },
+      { id: "deleted", date: "2026-01-04", type: "expense", cat: "food", accountId: "gone", amount: 75, note: "" },
+      { id: "income", date: "2026-01-05", type: "income", cat: "salary", accountId: "bank", amount: 500, note: "" },
+    ];
+    expect(savingRate(500, 125)).toBe(0.25);
+    expect(savingRate(0, 125)).toBeNull();
+    expect(expenseByAccount(store, store.expense.txns).map(({ name, amount }) => ({ name, amount }))).toEqual([
+      { name: "VCB", amount: 200 },
+      { name: "Tiền mặt", amount: 100 },
+      { name: "(đã xóa)", amount: 75 },
+      { name: "Chưa xác định", amount: 50 },
+    ]);
   });
 
   it("nhập được backup v2 và giữ migration thu nhập", () => {
@@ -77,6 +136,24 @@ describe("nghiệp vụ sổ tài chính", () => {
     expect(ensureYear(store, 2030)).toBe(true);
     expect(store.years["2030"]?.funds.dp).toEqual(new Array(12).fill(1_000_000));
     expect(ensureYear(store, 2030)).toBe(false);
+  });
+
+  it("ghép quỹ được chia sẻ nhưng loại nó khỏi báo cáo cá nhân của thành viên", () => {
+    const store = createDefaultStore();
+    const shared: SharedFundView = {
+      id: "shared-1", revision: 1, role: "viewer",
+      owner: { sub: "owner", name: "Chủ quỹ", email: "owner@example.com" },
+      contributors: {},
+      content: {
+        fund: { id: "shared-1", name: "Quỹ chung", color: "#123456", cat: "saving" },
+        years: { "2026": { funds: new Array(12).fill(500), details: new Array(12).fill(null) } },
+        goal: { years: {}, all: 0 }, fundPlan: 0, openingBalance: 0,
+      },
+    };
+    mergeSharedFunds(store, [shared]);
+    expect(totalFundsForMonth(store, 2026, 0)).toBe(500);
+    expect(totalFundsForMonth(store, 2026, 0, countsInPersonalReports)).toBe(0);
+    expect(privateLedger(store).funds.some((fund) => fund.id === shared.id)).toBe(false);
   });
 
   it("thu thập, trộn và quy đổi dữ liệu thị trường", () => {

@@ -1,5 +1,7 @@
 import type {
   CryptoQuote,
+  Account,
+  AccountType,
   FinanceCategory,
   FinanceStore,
   FinancialProfile,
@@ -7,6 +9,8 @@ import type {
   FundCategory,
   FundDetail,
   FundGoal,
+  SharedFundContent,
+  SharedFundView,
   GoldLot,
   HoldingLot,
   MarketAssetRequest,
@@ -29,6 +33,25 @@ export const PALETTE = [
   "#118AB2", "#3D5A80", "#5E60CE", "#7B2CBF", "#C71F66", "#EF476F",
   "#F15BB5", "#9C6644", "#6D6875", "#1B263B",
 ];
+
+export type StatisticsScope =
+  | { mode: "all" }
+  | { mode: "year"; year: number }
+  | { mode: "month"; month: string }
+  | { mode: "range"; from: string; to: string };
+
+export interface StatisticsMonth {
+  year: number;
+  month: number;
+  key: string;
+}
+
+export interface AccountExpenseBreakdown {
+  id: string;
+  name: string;
+  color: string;
+  amount: number;
+}
 
 export const FUND_CATEGORIES: Record<FundCategory, { label: string; short: string }> = {
   saving: { label: "Tiết kiệm (VND)", short: "Tiết kiệm" },
@@ -58,6 +81,16 @@ export const DEFAULT_INCOME_CATEGORIES: FinanceCategory[] = [
   { id: "side-income", name: "Thu nhập phụ", color: "#118AB2" },
   { id: "refund", name: "Hoàn tiền", color: "#8A5CC4" },
   { id: "income-other", name: "Khác", color: "#9C6644" },
+];
+
+export const DEFAULT_ACCOUNT_TYPES: AccountType[] = [
+  { id: "bank", name: "Ngân hàng" },
+  { id: "cash", name: "Tiền mặt" },
+  { id: "credit-card", name: "Thẻ tín dụng" },
+];
+
+export const DEFAULT_ACCOUNTS: Account[] = [
+  { id: "cash", name: "Tiền mặt", typeId: "cash" },
 ];
 
 export const fmt = (value: number): string => `${Math.round(value || 0).toLocaleString("vi-VN")} ₫`;
@@ -141,6 +174,8 @@ export function createDefaultStore(): FinanceStore {
     expense: {
       cats: structuredClone(DEFAULT_EXPENSE_CATEGORIES),
       incomeCats: structuredClone(DEFAULT_INCOME_CATEGORIES),
+      accountTypes: structuredClone(DEFAULT_ACCOUNT_TYPES),
+      accounts: structuredClone(DEFAULT_ACCOUNTS),
       txns: [],
     },
     market: emptyMarket(),
@@ -169,15 +204,26 @@ function ensureYearData(value: any, funds: Fund[]): YearData {
   return year;
 }
 
-function ensureExpense(store: any): void {
+function ensureExpense(store: any): boolean {
+  let changed = false;
   if (!store.expense || typeof store.expense !== "object") store.expense = {};
   if (!Array.isArray(store.expense.cats) || store.expense.cats.length === 0) {
     store.expense.cats = structuredClone(DEFAULT_EXPENSE_CATEGORIES);
+    changed = true;
   }
   for (const category of store.expense.cats) category.budget = cleanMoney(category.budget);
   if (!Array.isArray(store.expense.txns)) store.expense.txns = [];
   if (!Array.isArray(store.expense.incomeCats) || store.expense.incomeCats.length === 0) {
     store.expense.incomeCats = structuredClone(DEFAULT_INCOME_CATEGORIES);
+    changed = true;
+  }
+  if (!Array.isArray(store.expense.accountTypes)) {
+    store.expense.accountTypes = structuredClone(DEFAULT_ACCOUNT_TYPES);
+    changed = true;
+  }
+  if (!Array.isArray(store.expense.accounts)) {
+    store.expense.accounts = structuredClone(DEFAULT_ACCOUNTS);
+    changed = true;
   }
   const fallback = store.expense.incomeCats.find((category: FinanceCategory) => category.id === "income-other")
     ?? store.expense.incomeCats[0];
@@ -186,6 +232,7 @@ function ensureExpense(store: any): void {
       transaction.cat = fallback?.id ?? "income-other";
     }
   }
+  return changed;
 }
 
 function ensureMarket(store: any): void {
@@ -335,15 +382,129 @@ export function normalizeStore(payload: StoredFinancePayload): { store: FinanceS
   store.goals ||= {};
   store.prices ||= {};
   store.showGoals = Boolean(store.showGoals);
-  ensureExpense(store);
+  const expenseMigration = ensureExpense(store);
   ensureMarket(store);
   ensureFinancialProfile(store);
-  const needsSave = migrateAssetDetails(store) || migrateFixedIncome(store) || resetFutureLegacySalary(store);
+  const assetMigration = migrateAssetDetails(store);
+  const incomeMigration = migrateFixedIncome(store);
+  const futureIncomeMigration = resetFutureLegacySalary(store);
+  const needsSave = expenseMigration || assetMigration || incomeMigration || futureIncomeMigration;
   return { store, needsSave };
+}
+
+/** Assemble private ledger data and isolated shared-fund records for the UI only. */
+export function mergeSharedFunds(store: FinanceStore, sharedFunds: SharedFundView[]): FinanceStore {
+  for (const shared of sharedFunds) {
+    const { content } = shared;
+    const fund = { ...structuredClone(content.fund), id: shared.id, sharing: {
+      sharedFundId: shared.id,
+      ownerId: shared.owner.sub,
+      ownerName: shared.owner.name || shared.owner.email,
+      role: shared.role,
+    } };
+    if (!store.funds.some((item) => item.id === shared.id)) store.funds.push(fund);
+    for (const data of Object.values(store.years)) {
+      data.funds[shared.id] ??= new Array(12).fill(0);
+      data.details[shared.id] ??= new Array(12).fill(null);
+    }
+    for (const year of Object.keys(content.years)) ensureYear(store, Number(year));
+    for (const [year, values] of Object.entries(content.years)) {
+      const target = store.years[year]!;
+      target.funds[shared.id] = structuredClone(values.funds);
+      target.details[shared.id] = structuredClone(values.details);
+    }
+    store.goals[shared.id] = structuredClone(content.goal);
+    store.financialProfile.fundPlan[shared.id] = content.fundPlan;
+    store.financialProfile.openingBalances[shared.id] = content.openingBalance;
+  }
+  return store;
+}
+
+export function sharedFundContent(store: FinanceStore, fundId: string): SharedFundContent {
+  const fund = store.funds.find((item) => item.id === fundId);
+  if (!fund) throw new Error("Không tìm thấy quỹ chung.");
+  const years: SharedFundContent["years"] = {};
+  for (const [year, values] of Object.entries(store.years)) {
+    years[year] = {
+      funds: structuredClone(values.funds[fundId] ?? new Array(12).fill(0)),
+      details: structuredClone(values.details[fundId] ?? new Array(12).fill(null)),
+    };
+  }
+  const plainFund = structuredClone(fund);
+  delete plainFund.sharing;
+  return {
+    fund: plainFund,
+    years,
+    goal: structuredClone(store.goals[fundId] ?? { years: {}, all: 0 }),
+    fundPlan: store.financialProfile.fundPlan[fundId] ?? 0,
+    openingBalance: store.financialProfile.openingBalances[fundId] ?? 0,
+  };
+}
+
+/** Remove shared records from a UI ledger before writing the user's private data. */
+export function privateLedger(store: FinanceStore): FinanceStore {
+  const result = structuredClone(store);
+  const sharedIds = result.funds.filter((fund) => fund.sharing).map((fund) => fund.id);
+  result.funds = result.funds.filter((fund) => !fund.sharing).map(({ sharing: _sharing, ...fund }) => fund);
+  for (const data of Object.values(result.years)) {
+    for (const id of sharedIds) {
+      delete data.funds[id];
+      delete data.details[id];
+    }
+  }
+  for (const id of sharedIds) {
+    delete result.goals[id];
+    delete result.financialProfile.fundPlan[id];
+    delete result.financialProfile.openingBalances[id];
+  }
+  return result;
+}
+
+export function countsInPersonalReports(fund: Fund): boolean {
+  return !fund.sharing || fund.sharing.role === "owner";
 }
 
 export function years(store: FinanceStore): number[] {
   return Object.keys(store.years).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+}
+
+export function statisticsAvailableYears(store: FinanceStore): number[] {
+  const result = new Set(years(store));
+  for (const transaction of store.expense.txns) {
+    const year = Number(transaction.date.slice(0, 4));
+    if (Number.isInteger(year) && year > 0) result.add(year);
+  }
+  return [...result].sort((a, b) => a - b);
+}
+
+export function statisticsMonths(store: FinanceStore, scope: StatisticsScope): StatisticsMonth[] {
+  if (scope.mode === "month") {
+    const parsed = parseStatisticsMonth(scope.month);
+    return parsed ? [parsed] : [];
+  }
+  if (scope.mode === "range") {
+    const from = parseStatisticsMonth(scope.from);
+    const to = parseStatisticsMonth(scope.to);
+    if (!from || !to || from.key > to.key) return [];
+    return monthsBetween(from, to);
+  }
+  const selectedYears = scope.mode === "year" ? [scope.year] : statisticsAvailableYears(store);
+  return selectedYears.flatMap((year) => Array.from({ length: 12 }, (_, month) => ({ year, month, key: monthKey(year, month) })));
+}
+
+export function statisticsScopeLabel(scope: StatisticsScope): string {
+  if (scope.mode === "all") return "Toàn bộ các năm";
+  if (scope.mode === "year") return `Năm ${scope.year}`;
+  const from = parseStatisticsMonth(scope.mode === "month" ? scope.month : scope.from);
+  const to = parseStatisticsMonth(scope.mode === "range" ? scope.to : scope.month);
+  if (!from || !to) return "Khoảng thời gian không hợp lệ";
+  const fromLabel = `${MONTHS_FULL[from.month]} / ${from.year}`;
+  if (from.key === to.key) return fromLabel;
+  return `Từ ${fromLabel} đến ${MONTHS_FULL[to.month]} / ${to.year}`;
+}
+
+export function savingRate(income: number, funds: number): number | null {
+  return income > 0 ? funds / income : null;
 }
 
 export function ensureYear(store: FinanceStore, year: number): boolean {
@@ -385,9 +546,59 @@ export function categoryForTransaction(store: FinanceStore, transaction: Pick<Tr
   return categoriesForType(store, transaction.type).find((category) => category.id === transaction.cat);
 }
 
+export function accountForTransaction(store: FinanceStore, transaction: Pick<Transaction, "accountId">): Account | undefined {
+  return store.expense.accounts.find((account) => account.id === transaction.accountId);
+}
+
+export function expenseByAccount(store: FinanceStore, transactions: Transaction[]): AccountExpenseBreakdown[] {
+  const amounts = new Map<string, number>();
+  for (const transaction of transactions) {
+    if (transaction.type !== "expense") continue;
+    const id = transaction.accountId
+      ? accountForTransaction(store, transaction) ? `account:${transaction.accountId}` : "deleted"
+      : "unassigned";
+    amounts.set(id, (amounts.get(id) ?? 0) + transaction.amount);
+  }
+  return [...amounts].map(([id, amount], index) => {
+    const accountId = id.startsWith("account:") ? id.slice("account:".length) : "";
+    const account = accountId ? store.expense.accounts.find((item) => item.id === accountId) : undefined;
+    return {
+      id,
+      name: account?.name ?? (id === "unassigned" ? "Chưa xác định" : "(đã xóa)"),
+      color: PALETTE[index % PALETTE.length]!,
+      amount,
+    };
+  }).sort((a, b) => b.amount - a.amount);
+}
+
+export function accountTypeForAccount(store: FinanceStore, account: Pick<Account, "typeId">): AccountType | undefined {
+  return store.expense.accountTypes.find((type) => type.id === account.typeId);
+}
+
 export function monthTransactions(store: FinanceStore, year: number, month: number): Transaction[] {
   const key = monthKey(year, month);
   return store.expense.txns.filter((transaction) => transactionMonthKey(transaction) === key);
+}
+
+function parseStatisticsMonth(value: string): StatisticsMonth | null {
+  const match = /^(\d{4,})-(0[1-9]|1[0-2])$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  return Number.isInteger(year) && year > 0 ? { year, month, key: value } : null;
+}
+
+function monthsBetween(from: StatisticsMonth, to: StatisticsMonth): StatisticsMonth[] {
+  const result: StatisticsMonth[] = [];
+  for (let year = from.year, month = from.month; year < to.year || (year === to.year && month <= to.month);) {
+    result.push({ year, month, key: monthKey(year, month) });
+    month += 1;
+    if (month === 12) {
+      year += 1;
+      month = 0;
+    }
+  }
+  return result;
 }
 
 export function totalIncomeForMonth(store: FinanceStore, year: number, month: number): number {
@@ -396,10 +607,10 @@ export function totalIncomeForMonth(store: FinanceStore, year: number, month: nu
     .reduce((sum, transaction) => sum + transaction.amount, 0);
 }
 
-export function totalFundsForMonth(store: FinanceStore, year: number, month: number): number {
+export function totalFundsForMonth(store: FinanceStore, year: number, month: number, includeFund: (fund: Fund) => boolean = () => true): number {
   const data = store.years[String(year)];
   if (!data) return 0;
-  return store.funds.reduce((sum, fund) => sum + (data.funds[fund.id]?.[month] ?? 0), 0);
+  return store.funds.filter(includeFund).reduce((sum, fund) => sum + (data.funds[fund.id]?.[month] ?? 0), 0);
 }
 
 export function yearToDateFund(store: FinanceStore, year: number, fundId: string): number {

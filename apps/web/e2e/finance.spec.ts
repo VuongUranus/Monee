@@ -21,7 +21,7 @@ test("deep link ba trang và refresh hoạt động", async ({ page }) => {
 
 test("thêm, sửa, lọc và xóa giao dịch", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name.includes("mobile"), "Luồng CRUD đầy đủ chỉ cần chạy một lần ở desktop.");
-  const amount = page.getByText("Số tiền").locator("..").getByRole("textbox");
+  const amount = page.getByRole("textbox", { name: "Số tiền" });
   await amount.fill("250000");
   await amount.blur();
   await page.getByRole("textbox", { name: "Ghi chú", exact: true }).fill("Kiểm thử bữa trưa");
@@ -30,7 +30,7 @@ test("thêm, sửa, lọc và xóa giao dịch", async ({ page }, testInfo) => {
 
   await page.getByLabel("Sửa giao dịch").click();
   const editingRow = page.locator("tr.editing-row");
-  await editingRow.locator("input").nth(1).fill("Bữa trưa đã sửa");
+  await editingRow.getByRole("textbox", { name: "Ghi chú đang sửa" }).fill("Bữa trưa đã sửa");
   await page.getByLabel("Lưu giao dịch").click();
   await expect(page.getByText("Bữa trưa đã sửa")).toBeVisible();
 
@@ -113,6 +113,48 @@ test("chuyển tháng năm và CRUD quỹ, danh mục", async ({ page }, testInf
   await expect(categoryDialog.locator(".manager-row.category-row")).toHaveCount(1);
 });
 
+test("quản lý tài khoản và gán tài khoản cho giao dịch", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name.includes("mobile"), "Luồng quản lý đầy đủ chỉ cần chạy một lần ở desktop.");
+  await page.getByRole("button", { name: /Quản lý tài khoản/ }).click();
+  const accountDialog = page.getByRole("dialog", { name: "Quản lý tài khoản" });
+  await accountDialog.getByRole("button", { name: "Loại tài khoản" }).click();
+  await accountDialog.getByPlaceholder("Tên loại tài khoản mới").fill("Ví điện tử");
+  await accountDialog.getByRole("button", { name: "+ Thêm", exact: true }).click();
+
+  await accountDialog.getByRole("button", { name: "Tài khoản", exact: true }).click();
+  await accountDialog.getByPlaceholder("Tên tài khoản mới").fill("VCB kiểm thử");
+  await accountDialog.getByRole("combobox", { name: "Loại tài khoản mới" }).click();
+  await page.getByRole("option", { name: "Ngân hàng", exact: true }).click();
+  await accountDialog.getByRole("button", { name: "+ Thêm", exact: true }).click();
+  const accountName = accountDialog.getByLabel("Tên VCB kiểm thử");
+  await expect(accountName).toHaveValue("VCB kiểm thử");
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("combobox", { name: "Tài khoản", exact: true }).click();
+  await page.getByRole("option", { name: "VCB kiểm thử", exact: true }).click();
+  const amount = page.getByRole("textbox", { name: "Số tiền" });
+  await amount.fill("250000");
+  await amount.blur();
+  await page.getByRole("textbox", { name: "Ghi chú", exact: true }).fill("Chi từ VCB");
+  await page.getByRole("button", { name: "+ Thêm khoản" }).click();
+  await expect(page.locator("tr").filter({ hasText: "Chi từ VCB" })).toContainText("VCB kiểm thử");
+
+  await page.getByRole("combobox", { name: "Tài khoản trong lịch sử" }).click();
+  await page.getByRole("option", { name: "VCB kiểm thử", exact: true }).click();
+  await expect(page.getByText("Hiển thị 1/1 khoản")).toBeVisible();
+
+  await page.getByRole("link", { name: "Thống kê" }).click();
+  await expect(page.getByRole("heading", { name: /Chi tiêu theo tài khoản — Năm \d{4}/ })).toBeVisible();
+  await expect(page.getByText("VCB kiểm thử", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Chi tiêu" }).click();
+
+  await page.getByRole("button", { name: /Quản lý tài khoản/ }).click();
+  const deletedRow = accountDialog.getByLabel("Tên VCB kiểm thử").locator("..");
+  await deletedRow.getByRole("button", { name: "Xóa" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("tr").filter({ hasText: "Chi từ VCB" })).toContainText("(đã xóa)");
+});
+
 test("holdings cổ phiếu, crypto và biểu đồ mọi năm", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name.includes("mobile"), "Luồng tài sản đầy đủ chỉ cần chạy một lần ở desktop.");
   await page.goto("/funds");
@@ -142,7 +184,7 @@ test("holdings cổ phiếu, crypto và biểu đồ mọi năm", async ({ page 
   await page.getByRole("option", { name: "Toàn bộ các năm", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Diễn biến tích lũy — Toàn bộ các năm" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Thống kê thu chi — Toàn bộ các năm" })).toBeVisible();
-  await expect(page.locator("canvas")).toHaveCount(5);
+  await expect(page.locator("canvas")).toHaveCount(6);
 });
 
 test("xuất file và nhập lại bản sao lưu", async ({ page }, testInfo) => {

@@ -85,6 +85,45 @@ describe("repository JSON", () => {
 });
 
 describe("Fastify data và market routes", () => {
+  it("chia sẻ quỹ theo email, áp quyền và phát hiện xung đột revision", async () => {
+    const initialData = {
+      funds: [{ id: "joint", name: "Quỹ chung", color: "#123456", cat: "saving" }],
+      years: { "2026": { income: new Array(12).fill(0), funds: { joint: new Array(12).fill(100) }, details: { joint: new Array(12).fill(null) }, notes: new Array(12).fill("") } },
+      goals: { joint: { years: { "2026": 1000 }, all: 2000 } },
+      financialProfile: { fundPlan: { joint: 50 }, openingBalances: { joint: 20 } },
+    };
+    const { app, cookie, databasePath } = await createAuthenticatedApp({ initialData });
+    const bob: UserProfile = { sub: "integration-bob", email: "bob@example.com", name: "Bob", picture: "" };
+    const database = JSON.parse(await fs.readFile(databasePath, "utf8")) as UserDatabase;
+    database.users[bob.sub] = { profile: bob, data: { onboarding: { status: "pending", version: 1 } }, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() };
+    await fs.writeFile(databasePath, JSON.stringify(database), "utf8");
+    const bobSession = app.finance.sessions.createSession(bob);
+    const bobCookie = `finance_session=${app.finance.sessions.signedSessionValue(bobSession)}`;
+    try {
+      const created = await app.inject({ method: "POST", url: "/api/shared-funds", headers: { cookie }, payload: { fundId: "joint", email: bob.email, role: "viewer" } });
+      expect(created.statusCode).toBe(200);
+      const shared = created.json();
+      expect(shared.content.fund.id).toBe(shared.id);
+      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json().data.funds).toEqual([]);
+      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json().sharedFunds).toHaveLength(1);
+      expect((await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}`, headers: { cookie: bobCookie }, payload: { revision: 1, content: shared.content } })).statusCode).toBe(403);
+
+      const upgraded = await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}/members`, headers: { cookie }, payload: { email: bob.email, role: "editor" } });
+      expect(upgraded.statusCode).toBe(200);
+      const contribution = await app.inject({ method: "POST", url: `/api/shared-funds/${shared.id}/contributions`, headers: { cookie: bobCookie }, payload: { month: "2026-07", amount: 250_000, note: "Góp quỹ" } });
+      expect(contribution.statusCode).toBe(200);
+      expect(contribution.json().content.contributions["2026-07"]).toEqual([expect.objectContaining({ memberId: bob.sub, amount: 250_000, note: "Góp quỹ" })]);
+      const editable = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json().sharedFunds[0];
+      const saved = await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}`, headers: { cookie: bobCookie }, payload: { revision: editable.revision, content: editable.content } });
+      expect(saved.statusCode).toBe(200);
+      expect((await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}`, headers: { cookie: bobCookie }, payload: { revision: editable.revision, content: editable.content } })).statusCode).toBe(409);
+      expect((await app.inject({ method: "DELETE", url: `/api/shared-funds/${shared.id}/members/${bob.sub}`, headers: { cookie } })).statusCode).toBe(204);
+      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json().sharedFunds).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("chấp nhận object cũ, giữ thứ tự PUT và trả no-store", async () => {
     const { app, cookie } = await createAuthenticatedApp({ initialData: { revision: 0 } });
     try {
@@ -98,7 +137,7 @@ describe("Fastify data và market routes", () => {
       const read = await app.inject({ method: "GET", url: "/api/data", headers: { cookie } });
       expect(read.statusCode).toBe(200);
       expect(read.headers["cache-control"]).toBe("no-store");
-      expect(read.json()).toEqual({ revision: 2 });
+      expect(read.json()).toEqual({ data: { revision: 2 }, sharedFunds: [] });
     } finally {
       await app.close();
     }

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "users": {
     "117891344370487121317": {
       "profile": {
@@ -26,20 +26,6 @@
               0
             ],
             "funds": {
-              "dp": [
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000,
-                1625000
-              ],
               "dt": [
                 0,
                 0,
@@ -98,20 +84,6 @@
               ""
             ],
             "details": {
-              "dp": [
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null
-              ],
               "dt": [
                 null,
                 null,
@@ -200,20 +172,6 @@
               0
             ],
             "funds": {
-              "dp": [
-                15000000,
-                5000000,
-                8500000,
-                15000000,
-                7500000,
-                10000000,
-                2500000,
-                0,
-                0,
-                0,
-                0,
-                0
-              ],
               "dt": [
                 0,
                 0,
@@ -272,20 +230,6 @@
               ""
             ],
             "details": {
-              "dp": [
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null
-              ],
               "dt": [
                 null,
                 null,
@@ -341,12 +285,6 @@
           }
         },
         "goals": {
-          "dp": {
-            "all": 300000000,
-            "years": {
-              "2026": 150000000
-            }
-          },
           "dt": {
             "all": 0,
             "years": {}
@@ -364,12 +302,6 @@
         },
         "showGoals": true,
         "funds": [
-          {
-            "id": "dp",
-            "name": "Quỹ Tiết Kiệm",
-            "color": "#3f7d5c",
-            "cat": "saving"
-          },
           {
             "id": "cr",
             "name": "Coin củng",
@@ -792,7 +724,8 @@
               "type": "expense",
               "cat": "trans",
               "amount": 32000,
-              "note": "Tiền gửi xe"
+              "note": "Tiền gửi xe",
+              "accountId": "cash"
             },
             {
               "id": "legacy-salary-2025-01",
@@ -1013,6 +946,55 @@
               "name": "Khác",
               "color": "#9C6644"
             }
+          ],
+          "accountTypes": [
+            {
+              "id": "bank",
+              "name": "Ngân hàng"
+            },
+            {
+              "id": "cash",
+              "name": "Tiền mặt"
+            },
+            {
+              "id": "credit-card",
+              "name": "Thẻ tín dụng"
+            },
+            {
+              "id": "momo",
+              "name": "Momo"
+            },
+            {
+              "id": "zalopay",
+              "name": "Zalopay"
+            }
+          ],
+          "accounts": [
+            {
+              "id": "cash",
+              "name": "Tiền mặt",
+              "typeId": "cash"
+            },
+            {
+              "id": "tai-khoan-ngan-hang-vcb",
+              "name": "Tài khoản ngân hàng (VCB)",
+              "typeId": "bank"
+            },
+            {
+              "id": "the-tin-dung",
+              "name": "Thẻ tín dụng",
+              "typeId": "credit-card"
+            },
+            {
+              "id": "momo",
+              "name": "Momo",
+              "typeId": "momo"
+            },
+            {
+              "id": "zalopay",
+              "name": "Zalopay",
+              "typeId": "zalopay"
+            }
           ]
         },
         "market": {
@@ -1185,14 +1167,12 @@
             "e1784885510727pp": 900000
           },
           "fundPlan": {
-            "dp": 0,
             "dt": 0,
             "vang": 0,
             "cr": 0
           },
           "emergencyFundGoal": 0,
           "openingBalances": {
-            "dp": 0,
             "dt": 0,
             "vang": 0,
             "cr": 0
@@ -1211,7 +1191,556 @@
         "futureIncomeResetVersion": 1
       },
       "createdAt": "2026-07-25T08:00:41.206Z",
-      "updatedAt": "2026-07-25T17:12:40.971Z"
+      "updatedAt": "2026-07-25T18:33:56.341Z"
+    },
+    "112196069224115118158": {
+      "profile": {
+        "sub": "112196069224115118158",
+        "email": "doanminhvuong465@gmail.com",
+        "name": "Vương Minh",
+        "picture": "https://lh3.googleusercontent.com/a/ACg8ocLydaAziA_ztEPvJ04dtQq4LIPNw5ohznCNjPx3oq2KA6_Lgw=s96-c"
+      },
+      "data": {
+        "funds": [
+          {
+            "id": "dt",
+            "name": "Quỹ đầu tư",
+            "color": "#3b6ea5",
+            "cat": "stock"
+          },
+          {
+            "id": "vang",
+            "name": "Quỹ mua vàng",
+            "color": "#c8963e",
+            "cat": "gold"
+          },
+          {
+            "id": "cr",
+            "name": "Crypto",
+            "color": "#8a5cc4",
+            "cat": "crypto"
+          }
+        ],
+        "years": {
+          "2025": {
+            "income": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "funds": {
+              "dt": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "vang": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "cr": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "details": {
+              "dt": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "vang": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "cr": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            "notes": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          },
+          "2026": {
+            "income": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "funds": {
+              "dt": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "vang": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "cr": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "details": {
+              "dt": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "vang": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "cr": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            },
+            "notes": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        },
+        "goals": {},
+        "prices": {},
+        "showGoals": false,
+        "expense": {
+          "cats": [
+            {
+              "id": "food",
+              "name": "Ăn uống",
+              "color": "#E4572E",
+              "budget": 5000000
+            },
+            {
+              "id": "living",
+              "name": "Sinh hoạt",
+              "color": "#F3A712",
+              "budget": 3000000
+            },
+            {
+              "id": "trans",
+              "name": "Đi lại",
+              "color": "#118AB2",
+              "budget": 1500000
+            },
+            {
+              "id": "fun",
+              "name": "Giải trí",
+              "color": "#7B2CBF",
+              "budget": 1500000
+            },
+            {
+              "id": "other",
+              "name": "Khác",
+              "color": "#4C9F70",
+              "budget": 0
+            }
+          ],
+          "incomeCats": [
+            {
+              "id": "salary",
+              "name": "Lương",
+              "color": "#4C9F70"
+            },
+            {
+              "id": "bonus",
+              "name": "Thưởng",
+              "color": "#E6B325"
+            },
+            {
+              "id": "side-income",
+              "name": "Thu nhập phụ",
+              "color": "#118AB2"
+            },
+            {
+              "id": "refund",
+              "name": "Hoàn tiền",
+              "color": "#8A5CC4"
+            },
+            {
+              "id": "income-other",
+              "name": "Khác",
+              "color": "#9C6644"
+            }
+          ],
+          "txns": []
+        },
+        "market": {
+          "fx": null,
+          "gold": null,
+          "stocks": {},
+          "crypto": {},
+          "cryptoSymbols": {},
+          "matches": {},
+          "errors": [],
+          "updatedAt": null
+        },
+        "onboarding": {
+          "status": "pending",
+          "version": 1
+        },
+        "financialProfile": {
+          "monthlyIncome": 22500000,
+          "monthlyBudgets": {
+            "food": 5000000,
+            "living": 3000000,
+            "trans": 1500000,
+            "fun": 1500000,
+            "other": 0
+          },
+          "fundPlan": {
+            "dt": 0,
+            "vang": 0,
+            "cr": 0
+          },
+          "emergencyFundGoal": 0,
+          "openingBalances": {
+            "dt": 0,
+            "vang": 0,
+            "cr": 0
+          },
+          "debt": {
+            "balance": 0,
+            "monthlyPayment": 0
+          }
+        },
+        "incomeMigrationVersion": 1,
+        "futureIncomeResetVersion": 1
+      },
+      "createdAt": "2026-07-25T17:46:07.794Z",
+      "updatedAt": "2026-07-25T17:48:11.559Z"
+    }
+  },
+  "sharedFunds": {
+    "shared-21b8df20715eff9ed2866763": {
+      "id": "shared-21b8df20715eff9ed2866763",
+      "ownerId": "112196069224115118158",
+      "revision": 2,
+      "content": {
+        "fund": {
+          "id": "shared-21b8df20715eff9ed2866763",
+          "name": "Quỹ dự phòng",
+          "color": "#3f7d5c",
+          "cat": "saving"
+        },
+        "years": {
+          "2025": {
+            "funds": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "details": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "2026": {
+            "funds": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "details": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          }
+        },
+        "goal": {
+          "years": {},
+          "all": 0
+        },
+        "fundPlan": 0,
+        "openingBalance": 0
+      },
+      "members": {},
+      "createdAt": "2026-07-25T17:46:46.740Z",
+      "updatedAt": "2026-07-25T17:48:11.567Z"
+    },
+    "shared-9ca752878ba5d8bb38df7ada": {
+      "id": "shared-9ca752878ba5d8bb38df7ada",
+      "ownerId": "117891344370487121317",
+      "revision": 20,
+      "content": {
+        "fund": {
+          "id": "shared-9ca752878ba5d8bb38df7ada",
+          "name": "Quỹ Tiết Kiệm",
+          "color": "#3f7d5c",
+          "cat": "saving"
+        },
+        "years": {
+          "2025": {
+            "funds": [
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000,
+              1625000
+            ],
+            "details": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          "2026": {
+            "funds": [
+              15000000,
+              5000000,
+              8500000,
+              15000000,
+              7500000,
+              10000000,
+              2500000,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "details": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          }
+        },
+        "goal": {
+          "all": 300000000,
+          "years": {
+            "2026": 150000000
+          }
+        },
+        "fundPlan": 0,
+        "openingBalance": 0,
+        "contributions": {}
+      },
+      "members": {},
+      "createdAt": "2026-07-25T17:53:41.156Z",
+      "updatedAt": "2026-07-25T18:33:56.346Z"
     }
   }
 }

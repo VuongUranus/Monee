@@ -12,10 +12,11 @@
     "@fontsource-variable/source-sans-3": "^5.3.0",
     "@fontsource-variable/source-serif-4": "^5.3.0",
     "chart.js": "^4.5.0",
-    "flatpickr": "^4.6.13",
+    "date-fns": "^4.4.0",
     "immer": "^10.1.1",
     "react": "^19.1.1",
     "react-chartjs-2": "^5.3.0",
+    "react-day-picker": "^10.0.1",
     "react-dom": "^19.1.1",
     "react-router": "^7.18.1",
     "zustand": "^5.0.14"

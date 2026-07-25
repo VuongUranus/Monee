@@ -229,7 +229,7 @@ describe("Fastify API tương thích server cũ", () => {
     const legacy = { years: { "2026": { income: [123] } }, funds: [{ id: "saving" }] };
     await withApp(legacy, async ({ app, databasePath }) => {
       const aliceCookie = await login(app, "alice");
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: aliceCookie } })).json()).toEqual(legacy);
+      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: aliceCookie } })).json()).toEqual({ data: legacy, sharedFunds: [] });
 
       const changed = { years: { "2027": { income: [999] } } };
       const write = await app.inject({ method: "PUT", url: "/api/data", headers: { cookie: aliceCookie }, payload: changed });
@@ -237,12 +237,12 @@ describe("Fastify API tương thích server cũ", () => {
 
       const bobCookie = await login(app, "bob", "/expenses");
       expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json()).toEqual({
-        onboarding: { status: "pending", version: 1 },
+        data: { onboarding: { status: "pending", version: 1 } }, sharedFunds: [],
       });
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: aliceCookie } })).json()).toEqual(changed);
+      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: aliceCookie } })).json()).toEqual({ data: changed, sharedFunds: [] });
 
       const stored = JSON.parse(await fs.readFile(databasePath, "utf8"));
-      expect(stored.schemaVersion).toBe(3);
+      expect(stored.schemaVersion).toBe(4);
       expect(stored.users["google-alice"].data).toEqual(changed);
     });
   });

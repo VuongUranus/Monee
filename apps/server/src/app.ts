@@ -86,6 +86,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       "/api/auth/google/callback",
       "/api/auth/logout",
       "/api/data",
+      "/api/shared-funds",
       "/api/market/quotes",
     ]);
     if (known.has(request.url.split("?")[0] ?? "")) {

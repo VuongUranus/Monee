@@ -25,6 +25,17 @@ export interface Fund {
   name: string;
   color: string;
   cat: FundCategory;
+  /** Metadata only present in the assembled client workspace. */
+  sharing?: FundSharing;
+}
+
+export type SharedFundRole = "viewer" | "editor";
+
+export interface FundSharing {
+  sharedFundId: string;
+  ownerId: string;
+  ownerName: string;
+  role: "owner" | SharedFundRole;
 }
 
 export interface HoldingLot {
@@ -88,11 +99,25 @@ export interface FinanceCategory {
   budget?: number;
 }
 
+export interface AccountType {
+  id: string;
+  name: string;
+}
+
+export interface Account {
+  id: string;
+  name: string;
+  /** Undefined when its former type was deleted. */
+  typeId?: string;
+}
+
 export interface Transaction {
   id: string;
   date: string;
   type: TransactionType;
   cat: string;
+  /** Optional so historical entries remain valid without an assigned account. */
+  accountId?: string;
   amount: number;
   note: string;
 }
@@ -100,6 +125,8 @@ export interface Transaction {
 export interface ExpenseLedger {
   cats: FinanceCategory[];
   incomeCats: FinanceCategory[];
+  accountTypes: AccountType[];
+  accounts: Account[];
   txns: Transaction[];
 }
 
@@ -226,7 +253,57 @@ export interface UserDatabaseRecord {
   updatedAt: string;
 }
 
+export interface SharedFundContent {
+  fund: Fund;
+  years: Record<string, { funds: number[]; details: FundDetail[] }>;
+  goal: FundGoal;
+  fundPlan: number;
+  openingBalance: number;
+  /** Khoản tiền từng thành viên đã đóng theo tháng YYYY-MM. */
+  contributions?: Record<string, SharedFundContribution[]>;
+}
+
+export interface SharedFundContribution {
+  id: string;
+  memberId: string;
+  amount: number;
+  note: string;
+  createdAt: string;
+}
+
+export interface SharedFundMember {
+  userId: string;
+  role: SharedFundRole;
+  addedAt: string;
+}
+
+export interface SharedFundRecord {
+  id: string;
+  ownerId: string;
+  revision: number;
+  content: SharedFundContent;
+  members: Record<string, SharedFundMember>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SharedFundView {
+  id: string;
+  revision: number;
+  content: SharedFundContent;
+  owner: Pick<UserProfile, "sub" | "name" | "email">;
+  role: "owner" | SharedFundRole;
+  contributors: Record<string, Pick<UserProfile, "sub" | "name" | "email">>;
+  members?: Array<{ user: Pick<UserProfile, "sub" | "name" | "email">; role: SharedFundRole }>;
+}
+
+export interface FinanceWorkspaceResponse {
+  data: StoredFinancePayload;
+  sharedFunds: SharedFundView[];
+}
+
 export interface UserDatabase {
-  schemaVersion: 3;
+  schemaVersion: 3 | 4;
   users: Record<string, UserDatabaseRecord>;
+  sharedFunds?: Record<string, SharedFundRecord>;
 }

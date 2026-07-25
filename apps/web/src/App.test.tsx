@@ -14,8 +14,9 @@ function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function authenticatedFetch(putStatus = 204) {
+function authenticatedFetch(putStatus = 204, prepareLedger?: (ledger: ReturnType<typeof createDefaultStore>) => void) {
   const ledger = createDefaultStore();
+  prepareLedger?.(ledger);
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/auth/me") return jsonResponse({ user: { sub: "1", email: "test@example.com", name: "Người dùng", picture: "" } });
@@ -36,7 +37,7 @@ beforeEach(() => {
     loaded: false,
     selectedYear: 2026,
     selectedMonth: 6,
-    statisticsScope: 2026,
+    statisticsScope: { mode: "year", year: 2026 },
     saveState: "loading",
     saveMessage: "Đang tải dữ liệu…",
   });
@@ -57,6 +58,46 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Thống kê tài chính" })).toBeVisible();
     expect(screen.getByRole("heading", { name: /Diễn biến tích lũy/ })).toBeVisible();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/data", expect.anything()));
+  });
+
+  it("đổi được phạm vi thống kê sang tháng và khoảng tháng", async () => {
+    vi.stubGlobal("fetch", authenticatedFetch());
+    render(<MemoryRouter initialEntries={["/statistics"]}><App /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "Thống kê tài chính" });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Phạm vi" }));
+    fireEvent.click(screen.getByRole("option", { name: "Tháng cụ thể" }));
+    expect(screen.getByRole("combobox", { name: "Tháng thống kê" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Phạm vi" }));
+    fireEvent.click(screen.getByRole("option", { name: "Khoảng tháng" }));
+    expect(screen.getByRole("combobox", { name: "Từ tháng" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Đến tháng" })).toBeVisible();
+  });
+
+  it("hiển thị chi tiêu theo tài khoản trên trang chi tiêu", async () => {
+    vi.stubGlobal("fetch", authenticatedFetch(204, (ledger) => {
+      ledger.expense.txns.push({ id: "cash-expense", date: "2026-07-01", type: "expense", cat: "food", accountId: "cash", amount: 250_000, note: "Trưa" });
+    }));
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "Chi tiêu theo tài khoản" })).toBeVisible();
+    expect(screen.getAllByText("Tiền mặt").length).toBeGreaterThan(0);
+  });
+
+  it("phân trang lịch sử thu chi theo 10 giao dịch", async () => {
+    vi.stubGlobal("fetch", authenticatedFetch(204, (ledger) => {
+      for (let index = 1; index <= 11; index += 1) {
+        ledger.expense.txns.push({ id: `history-${index}`, date: `2026-07-${String(index).padStart(2, "0")}`, type: "expense", cat: "food", amount: index, note: `Lịch sử ${index}` });
+      }
+    }));
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    expect(await screen.findByRole("navigation", { name: "Phân trang lịch sử" })).toBeVisible();
+    expect(screen.getByText("Lịch sử 11")).toBeVisible();
+    expect(screen.queryByText("Lịch sử 1")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sau →" }));
+    expect(screen.getByText("Lịch sử 1")).toBeVisible();
+    expect(screen.queryByText("Lịch sử 11")).not.toBeInTheDocument();
   });
 
   it("cho chọn thêm năm trong picker và đóng khi click ra ngoài", async () => {

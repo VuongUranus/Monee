@@ -1,21 +1,28 @@
 import type { FinanceCategory, TransactionType } from "@chi-tieu/shared";
+import { AccountExpenseChart } from "@/components/AccountExpenseChart";
 import { DonutChart, FinanceBarChart } from "@/components/Charts";
 import { Select } from "@/components/Select";
 import {
+  countsInPersonalReports,
+  expenseByAccount,
   fmt,
   MONTHS,
   MONTHS_FULL,
+  savingRate,
+  statisticsAvailableYears,
+  statisticsMonths,
+  statisticsScopeLabel,
   totalFundsForMonth,
   totalIncomeForMonth,
   transactionMonthKey,
-  yearToDateFund,
-  years,
+  type StatisticsScope,
 } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
 
 interface StatisticsRow {
   year: number;
   month: number;
+  key: string;
   income: number;
   spent: number;
   funds: number;
@@ -23,90 +30,116 @@ interface StatisticsRow {
   byFund: Record<string, number>;
 }
 
+type ScopeMode = StatisticsScope["mode"];
+
 export function StatisticsPage() {
   const ledger = useFinanceStore((state) => state.ledger);
   const scope = useFinanceStore((state) => state.statisticsScope);
   const setScope = useFinanceStore((state) => state.setStatisticsScope);
-  const availableYears = years(ledger).slice().sort((a, b) => b - a);
-  const scopeYears = scope === "all" ? years(ledger) : [scope];
-  const allYears = scope === "all";
-  const scopeLabel = allYears ? "Toàn bộ các năm" : `Năm ${scope}`;
-  const rows: StatisticsRow[] = [];
-
-  for (const year of scopeYears) {
-    for (let month = 0; month < 12; month += 1) {
-      const income = totalIncomeForMonth(ledger, year, month);
-      const spent = ledger.expense.txns
-        .filter((transaction) => transaction.type === "expense" && transactionMonthKey(transaction) === `${year}-${String(month + 1).padStart(2, "0")}`)
-        .reduce((sum, transaction) => sum + transaction.amount, 0);
-      const funds = totalFundsForMonth(ledger, year, month);
-      rows.push({
-        year,
-        month,
-        income,
-        spent,
-        funds,
-        balance: income - spent - funds,
-        byFund: Object.fromEntries(ledger.funds.map((fund) => [fund.id, ledger.years[String(year)]?.funds[fund.id]?.[month] ?? 0])),
-      });
-    }
-  }
-
+  const selectedYear = useFinanceStore((state) => state.selectedYear);
+  const selectedMonth = useFinanceStore((state) => state.selectedMonth);
+  const availableYears = statisticsAvailableYears(ledger).slice().sort((a, b) => b - a);
+  const monthOptions = availableYears.flatMap((year) => Array.from({ length: 12 }, (_, month) => {
+    const key = `${year}-${String(month + 1).padStart(2, "0")}`;
+    return { value: key, label: `${MONTHS_FULL[month]} / ${year}` };
+  }));
+  const currentMonth = `${selectedYear}-${String(selectedMonth + 1).padStart(2, "0")}`;
+  const scopedMonths = statisticsMonths(ledger, scope);
+  const scopeLabel = statisticsScopeLabel(scope);
+  const rows: StatisticsRow[] = scopedMonths.map(({ year, month, key }) => {
+    const income = totalIncomeForMonth(ledger, year, month);
+    const spent = ledger.expense.txns
+      .filter((transaction) => transaction.type === "expense" && transactionMonthKey(transaction) === key)
+      .reduce((sum, transaction) => sum + transaction.amount, 0);
+    const funds = totalFundsForMonth(ledger, year, month, countsInPersonalReports);
+    return {
+      year,
+      month,
+      key,
+      income,
+      spent,
+      funds,
+      balance: income - spent - funds,
+      byFund: Object.fromEntries(ledger.funds.filter(countsInPersonalReports).map((fund) => [fund.id, ledger.years[String(year)]?.funds[fund.id]?.[month] ?? 0])),
+    };
+  });
   const totals = rows.reduce((result, row) => ({
     income: result.income + row.income,
     spent: result.spent + row.spent,
     funds: result.funds + row.funds,
     balance: result.balance + row.balance,
   }), { income: 0, spent: 0, funds: 0, balance: 0 });
-  const expenseBreakdown = categoryBreakdown(ledger.expense.cats, "expense", scopeYears);
-  const incomeBreakdown = categoryBreakdown(ledger.expense.incomeCats, "income", scopeYears);
-  const labels = rows.map((row) => allYears ? `${MONTHS[row.month]}/${row.year}` : MONTHS[row.month]!);
+  const selectedMonthKeys = new Set(rows.map((row) => row.key));
+  const scopedTransactions = ledger.expense.txns.filter((transaction) => selectedMonthKeys.has(transactionMonthKey(transaction)));
+  const expenseBreakdown = categoryBreakdown(ledger.expense.cats, "expense", scopedTransactions);
+  const incomeBreakdown = categoryBreakdown(ledger.expense.incomeCats, "income", scopedTransactions);
+  const accountExpenses = expenseByAccount(ledger, scopedTransactions);
+  const showYearInLabels = scope.mode === "all" || scope.mode === "range" || scope.mode === "month";
+  const labels = rows.map((row) => showYearInLabels ? `${MONTHS[row.month]}/${row.year}` : MONTHS[row.month]!);
   const trackedRows = rows.filter((row) => row.income || row.spent || row.funds);
+  const comparisonYears = [...new Set(rows.map((row) => row.year))];
+  const rate = savingRate(totals.income, totals.funds);
 
-  function categoryBreakdown(categories: FinanceCategory[], type: TransactionType, selectedYears: number[]) {
-    const yearSet = new Set(selectedYears.map(String));
-    return categories.map((category) => ({
-      ...category,
-      amount: ledger.expense.txns
-        .filter((transaction) => transaction.type === type && transaction.cat === category.id && yearSet.has(transaction.date.slice(0, 4)))
-        .reduce((sum, transaction) => sum + transaction.amount, 0),
-    })).filter((item) => item.amount > 0).sort((a, b) => b.amount - a.amount);
-  }
+  const changeMode = (mode: ScopeMode): void => {
+    if (mode === "all") setScope({ mode });
+    else if (mode === "year") setScope({ mode, year: scope.mode === "year" ? scope.year : selectedYear });
+    else if (mode === "month") setScope({ mode, month: scope.mode === "month" ? scope.month : currentMonth });
+    else setScope({ mode, from: scope.mode === "range" ? scope.from : currentMonth, to: scope.mode === "range" ? scope.to : currentMonth });
+  };
 
   return (
     <section className="page-view">
       <div className="statistics-filter">
         <label>Phạm vi
-          <Select
-            value={scope}
-            options={[{ value: "all", label: "Toàn bộ các năm" }, ...availableYears.map((year) => ({ value: year, label: `Năm ${year}` }))]}
-            onValueChange={setScope}
+          <Select<ScopeMode>
+            value={scope.mode}
+            options={[{ value: "all", label: "Toàn bộ các năm" }, { value: "year", label: "Theo năm" }, { value: "month", label: "Tháng cụ thể" }, { value: "range", label: "Khoảng tháng" }]}
+            onValueChange={changeMode}
             ariaLabel="Phạm vi"
           />
         </label>
-        <p className="hint">{allYears ? "Hiển thị riêng từng tháng-năm theo trình tự thời gian." : `Dữ liệu 12 tháng của năm ${scope}.`}</p>
+        {scope.mode === "year" ? <label>Năm
+          <Select<number> value={scope.year} options={availableYears.map((year) => ({ value: year, label: `Năm ${year}` }))} onValueChange={(year) => setScope({ mode: "year", year })} ariaLabel="Năm thống kê" />
+        </label> : null}
+        {scope.mode === "month" ? <label>Tháng
+          <Select<string> value={scope.month} options={monthOptions} onValueChange={(month) => setScope({ mode: "month", month })} ariaLabel="Tháng thống kê" />
+        </label> : null}
+        {scope.mode === "range" ? <>
+          <label>Từ tháng
+            <Select<string> value={scope.from} options={monthOptions} onValueChange={(from) => setScope({ mode: "range", from, to: from > scope.to ? from : scope.to })} ariaLabel="Từ tháng" />
+          </label>
+          <label>Đến tháng
+            <Select<string> value={scope.to} options={monthOptions} onValueChange={(to) => setScope({ mode: "range", from: to < scope.from ? to : scope.from, to })} ariaLabel="Đến tháng" />
+          </label>
+        </> : null}
+        <p className="hint">{scope.mode === "all" ? "Hiển thị riêng từng tháng-năm theo trình tự thời gian." : `Đang xem ${scopedMonths.length} tháng dữ liệu.`}</p>
       </div>
 
-      <div className="stat-row">
+      <div className="stat-row stat-row-5">
         <Stat label="Tổng thu" value={fmt(totals.income)} meta={scopeLabel} accent="green" />
         <Stat label="Tổng chi" value={fmt(totals.spent)} meta={scopeLabel} accent="rust" />
         <Stat label="Tổng trích quỹ" value={fmt(totals.funds)} meta={scopeLabel} accent="gold" />
+        <Stat label="Tỷ lệ tiết kiệm" value={rate === null ? "—" : `${Math.round(rate * 100)}%`} meta="trích quỹ / thu nhập" accent="green" />
         <Stat label="Số dư" value={fmt(totals.balance)} meta="thu − chi − trích quỹ" accent={totals.balance < 0 ? "rust" : "blue"} />
       </div>
 
-      <div className="grid">
+      <div className="statistics-breakdown-grid">
         <CategoryBreakdown title={`Cơ cấu chi — ${scopeLabel}`} entries={expenseBreakdown} empty="Chưa có khoản chi nào trong phạm vi này." />
         <CategoryBreakdown title={`Cơ cấu thu — ${scopeLabel}`} entries={incomeBreakdown} empty="Chưa có khoản thu nào trong phạm vi này." />
+        <article className="card">
+          <h2>Chi tiêu theo tài khoản — {scopeLabel}</h2>
+          <AccountExpenseChart entries={accountExpenses} empty="Chưa có khoản chi nào trong phạm vi này." />
+        </article>
       </div>
 
       <article className="card section-card">
         <h2>Diễn biến tích lũy — {scopeLabel}</h2>
-        <p className="hint">Số tiền phân bổ mỗi quỹ theo {allYears ? "từng tháng-năm" : "tháng trong năm"}.</p>
+        <p className="hint">Số tiền phân bổ mỗi quỹ theo từng tháng trong phạm vi chọn.</p>
         <div className="chart-wrap">
           <FinanceBarChart
             labels={labels}
             stacked
-            datasets={ledger.funds.map((fund) => ({
+            datasets={ledger.funds.filter(countsInPersonalReports).map((fund) => ({
               label: fund.name,
               values: rows.map((row) => row.byFund[fund.id] ?? 0),
               color: fund.color,
@@ -117,14 +150,14 @@ export function StatisticsPage() {
       </article>
 
       <article className="card section-card">
-        <h2>So sánh tích lũy theo năm</h2>
-        <p className="hint">Tổng tiền từng quỹ trong mỗi năm có dữ liệu.</p>
+        <h2>So sánh tích lũy theo năm — {scopeLabel}</h2>
+        <p className="hint">Tổng tiền từng quỹ trong phần dữ liệu đang xem.</p>
         <div className="chart-wrap">
           <FinanceBarChart
-            labels={ledger.funds.map((fund) => fund.name)}
-            datasets={years(ledger).map((year, index, list) => ({
+            labels={ledger.funds.filter(countsInPersonalReports).map((fund) => fund.name)}
+            datasets={comparisonYears.map((year, index, list) => ({
               label: String(year),
-              values: ledger.funds.map((fund) => yearToDateFund(ledger, year, fund.id)),
+              values: ledger.funds.filter(countsInPersonalReports).map((fund) => rows.filter((row) => row.year === year).reduce((sum, row) => sum + (row.byFund[fund.id] ?? 0), 0)),
               color: `rgba(59,110,165,${0.35 + (index / Math.max(1, list.length - 1)) * 0.65})`,
             }))}
           />
@@ -146,26 +179,34 @@ export function StatisticsPage() {
         </div>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Tháng</th><th>Thu</th><th>Chi</th><th>Trích quỹ</th><th>Số dư</th><th>Chi/thu</th></tr></thead>
+            <thead><tr><th>Tháng</th><th>Thu</th><th>Chi</th><th>Trích quỹ</th><th>Số dư</th><th>Chi/thu</th><th>Tiết kiệm/thu</th></tr></thead>
             <tbody>
               {trackedRows.map((row) => (
-                <tr key={`${row.year}-${row.month}`}>
-                  <td>{allYears ? `${MONTHS_FULL[row.month]} / ${row.year}` : MONTHS_FULL[row.month]}</td>
+                <tr key={row.key}>
+                  <td>{showYearInLabels ? `${MONTHS_FULL[row.month]} / ${row.year}` : MONTHS_FULL[row.month]}</td>
                   <td className="amt-income">{row.income ? fmt(row.income) : "—"}</td>
                   <td className="amt-expense">{row.spent ? fmt(row.spent) : "—"}</td>
                   <td>{row.funds ? fmt(row.funds) : "—"}</td>
                   <td className={row.balance < 0 ? "negative" : "positive"}>{row.income || row.spent || row.funds ? fmt(row.balance) : "—"}</td>
                   <td>{row.income ? `${Math.round(row.spent / row.income * 100)}%` : "—"}</td>
+                  <td>{savingRate(row.income, row.funds) === null ? "—" : `${Math.round(savingRate(row.income, row.funds)! * 100)}%`}</td>
                 </tr>
               ))}
             </tbody>
-            <tfoot><tr><td>{allYears ? "Tổng mọi năm" : "Cả năm"}</td><td>{fmt(totals.income)}</td><td>{fmt(totals.spent)}</td><td>{fmt(totals.funds)}</td><td>{fmt(totals.balance)}</td><td>{totals.income ? `${Math.round(totals.spent / totals.income * 100)}%` : "0%"}</td></tr></tfoot>
+            <tfoot><tr><td>{scope.mode === "all" ? "Tổng mọi năm" : scope.mode === "year" ? "Cả năm" : "Tổng phạm vi"}</td><td>{fmt(totals.income)}</td><td>{fmt(totals.spent)}</td><td>{fmt(totals.funds)}</td><td>{fmt(totals.balance)}</td><td>{totals.income ? `${Math.round(totals.spent / totals.income * 100)}%` : "—"}</td><td>{rate === null ? "—" : `${Math.round(rate * 100)}%`}</td></tr></tfoot>
           </table>
         </div>
         {!trackedRows.length ? <div className="empty-state">Chưa có khoản thu, chi hoặc trích quỹ trong phạm vi này.</div> : null}
       </article>
     </section>
   );
+}
+
+function categoryBreakdown(categories: FinanceCategory[], type: TransactionType, transactions: Array<{ type: TransactionType; cat: string; amount: number }>) {
+  return categories.map((category) => ({
+    ...category,
+    amount: transactions.filter((transaction) => transaction.type === type && transaction.cat === category.id).reduce((sum, transaction) => sum + transaction.amount, 0),
+  })).filter((item) => item.amount > 0).sort((a, b) => b.amount - a.amount);
 }
 
 function Stat({ label, value, meta, accent }: { label: string; value: string; meta: string; accent: "gold" | "green" | "rust" | "blue" }) {
