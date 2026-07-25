@@ -1,0 +1,23 @@
+{
+  "name": "@chi-tieu/server",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --exclude '../web/node_modules/.vite-temp/**' src/index.ts --dev",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@chi-tieu/shared": "3.0.0",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/static": "^10.1.2",
+    "dotenv": "^17.2.1",
+    "fastify": "^5.10.0",
+    "fastify-plugin": "^5.0.1"
+  },
+  "devDependencies": {
+    "@fastify/vite": "^9.1.0",
+    "tsx": "^4.20.3"
+  }
+}

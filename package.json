@@ -1,0 +1,41 @@
+{
+  "name": "chi-tieu-ca-nhan",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @chi-tieu/server",
+    "build": "npm run typecheck && npm run build -w @chi-tieu/web && npm run build -w @chi-tieu/server",
+    "start": "npm run start -w @chi-tieu/server",
+    "lint": "eslint .",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "npm run build && playwright test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.61.1",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^24.1.0",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "@typescript-eslint/eslint-plugin": "^8.38.0",
+    "@typescript-eslint/parser": "^8.38.0",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^16.3.0",
+    "jsdom": "^26.1.0",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^3.2.4"
+  }
+}

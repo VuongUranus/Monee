@@ -1,0 +1,1217 @@
+{
+  "schemaVersion": 3,
+  "users": {
+    "117891344370487121317": {
+      "profile": {
+        "sub": "117891344370487121317",
+        "email": "minhvuongday@gmail.com",
+        "name": "Minh Vương Đoàn",
+        "picture": "https://lh3.googleusercontent.com/a/ACg8ocKcemzzA-yViliXeiZhdmdoDPi3fUv1H9VzfcDDUl-fhfSWUQ=s96-c"
+      },
+      "data": {
+        "years": {
+          "2025": {
+            "income": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "funds": {
+              "dp": [
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000,
+                1625000
+              ],
+              "dt": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "vang": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "cr": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                6969041
+              ]
+            },
+            "notes": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "details": {
+              "dp": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "dt": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "vang": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "cr": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                {
+                  "type": "hold",
+                  "lots": [
+                    {
+                      "ticker": "BTC",
+                      "qty": 0.0020697,
+                      "providerId": "btc-bitcoin",
+                      "manualPrice": null
+                    },
+                    {
+                      "ticker": "ETH",
+                      "qty": 0.044575,
+                      "providerId": "eth-ethereum",
+                      "manualPrice": null
+                    },
+                    {
+                      "ticker": "SOL",
+                      "qty": 0.3889,
+                      "providerId": "sol-solana",
+                      "manualPrice": null
+                    },
+                    {
+                      "ticker": "BNB",
+                      "qty": 0.03575894,
+                      "providerId": "bnb-bnb",
+                      "manualPrice": null
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "2026": {
+            "income": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "funds": {
+              "dp": [
+                15000000,
+                5000000,
+                8500000,
+                15000000,
+                7500000,
+                10000000,
+                2500000,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "dt": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "vang": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "cr": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "notes": [
+              "Thưởng Tết 15tr",
+              "Về quê ăn Tết",
+              "Sinh Nhật của tui",
+              "Hoàn thuế 6tr",
+              "Lễ 30/4 1/5",
+              "",
+              "Đi Đà Lạt & Cho Ba mẹ 3 triệu tiền bảo hiểm & Sửa xe",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "details": {
+              "dp": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "dt": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                {
+                  "type": "hold",
+                  "lots": []
+                },
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "vang": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                {
+                  "type": "gold",
+                  "lots": []
+                },
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "cr": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                {
+                  "type": "hold",
+                  "lots": []
+                },
+                null,
+                null,
+                null,
+                null,
+                null
+              ]
+            }
+          }
+        },
+        "goals": {
+          "dp": {
+            "all": 300000000,
+            "years": {
+              "2026": 150000000
+            }
+          },
+          "dt": {
+            "all": 0,
+            "years": {}
+          },
+          "vang": {
+            "all": 0,
+            "years": {}
+          },
+          "cr": {
+            "all": 0,
+            "years": {
+              "2026": 13000000
+            }
+          }
+        },
+        "showGoals": true,
+        "funds": [
+          {
+            "id": "dp",
+            "name": "Quỹ Tiết Kiệm",
+            "color": "#3f7d5c",
+            "cat": "saving"
+          },
+          {
+            "id": "cr",
+            "name": "Coin củng",
+            "color": "#8a5cc4",
+            "cat": "crypto"
+          },
+          {
+            "id": "dt",
+            "name": "Đầu tư cổ phiếu",
+            "color": "#3b6ea5",
+            "cat": "stock"
+          },
+          {
+            "id": "vang",
+            "name": "Vàng",
+            "color": "#c8963e",
+            "cat": "gold"
+          }
+        ],
+        "prices": {
+          "BTC": 65612,
+          "ETH": 1896.4,
+          "BNB": 567.087,
+          "SOL": 76.133
+        },
+        "usdRate": 26314,
+        "expense": {
+          "cats": [
+            {
+              "id": "food",
+              "name": "Ăn uống",
+              "color": "#b5533a",
+              "budget": 3000000
+            },
+            {
+              "id": "trans",
+              "name": "Đi lại (Xăng, nhớt)",
+              "color": "#3b6ea5",
+              "budget": 600000
+            },
+            {
+              "id": "fun",
+              "name": "Giải trí",
+              "color": "#8a5cc4",
+              "budget": 2000000
+            },
+            {
+              "id": "e1784884735921po",
+              "name": "Mua sắm",
+              "color": "#E4572E",
+              "budget": 2000000
+            },
+            {
+              "id": "e17848854577691o",
+              "name": "Tiền Trọ",
+              "color": "#F3A712",
+              "budget": 3000000
+            },
+            {
+              "id": "e1784885510727pp",
+              "name": "Các phí hằng tháng (AI, Netflix, Nạp điện thoại,...)",
+              "color": "#8CB369",
+              "budget": 900000
+            },
+            {
+              "id": "other",
+              "name": "Khác",
+              "color": "#3f7d5c",
+              "budget": 1000000
+            }
+          ],
+          "txns": [
+            {
+              "id": "t17848842532798xp",
+              "date": "2026-07-05",
+              "type": "expense",
+              "cat": "food",
+              "amount": 1000000,
+              "note": "Ăn tối ở nhà vợ"
+            },
+            {
+              "id": "t1784884789137jmx",
+              "date": "2026-07-05",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 1500000,
+              "note": "Chuyển tiền cho dợ iu"
+            },
+            {
+              "id": "t1784884880295m5b",
+              "date": "2026-07-07",
+              "type": "expense",
+              "cat": "food",
+              "amount": 55000,
+              "note": ""
+            },
+            {
+              "id": "t1784884892804r20",
+              "date": "2026-07-08",
+              "type": "expense",
+              "cat": "food",
+              "amount": 54000,
+              "note": ""
+            },
+            {
+              "id": "t1784884932045bvd",
+              "date": "2026-07-09",
+              "type": "expense",
+              "cat": "food",
+              "amount": 25000,
+              "note": "Trà sữa"
+            },
+            {
+              "id": "t1784884982495qp9",
+              "date": "2026-07-10",
+              "type": "expense",
+              "cat": "food",
+              "amount": 29000,
+              "note": "Trà sữa"
+            },
+            {
+              "id": "t1784884990082xiy",
+              "date": "2026-07-10",
+              "type": "expense",
+              "cat": "food",
+              "amount": 48000,
+              "note": ""
+            },
+            {
+              "id": "t1784885011787cew",
+              "date": "2026-07-11",
+              "type": "expense",
+              "cat": "food",
+              "amount": 42750,
+              "note": ""
+            },
+            {
+              "id": "t1784885029105ixv",
+              "date": "2026-07-12",
+              "type": "expense",
+              "cat": "food",
+              "amount": 36381,
+              "note": ""
+            },
+            {
+              "id": "t1784885096399tb5",
+              "date": "2026-07-14",
+              "type": "expense",
+              "cat": "food",
+              "amount": 56000,
+              "note": ""
+            },
+            {
+              "id": "t1784885107793qhl",
+              "date": "2026-07-15",
+              "type": "expense",
+              "cat": "food",
+              "amount": 50632,
+              "note": ""
+            },
+            {
+              "id": "t1784885116757hmx",
+              "date": "2026-07-16",
+              "type": "expense",
+              "cat": "food",
+              "amount": 43750,
+              "note": ""
+            },
+            {
+              "id": "t1784885128127f3z",
+              "date": "2026-07-17",
+              "type": "expense",
+              "cat": "food",
+              "amount": 53336,
+              "note": ""
+            },
+            {
+              "id": "t1784885155695j6r",
+              "date": "2026-07-17",
+              "type": "expense",
+              "cat": "food",
+              "amount": 34800,
+              "note": "Trà sữa"
+            },
+            {
+              "id": "t1784885167299v7y",
+              "date": "2026-07-18",
+              "type": "expense",
+              "cat": "food",
+              "amount": 44750,
+              "note": ""
+            },
+            {
+              "id": "t1784885193698bd1",
+              "date": "2026-07-20",
+              "type": "expense",
+              "cat": "food",
+              "amount": 45417,
+              "note": ""
+            },
+            {
+              "id": "t1784885201756wzh",
+              "date": "2026-07-21",
+              "type": "expense",
+              "cat": "food",
+              "amount": 55050,
+              "note": ""
+            },
+            {
+              "id": "t17848852130311xh",
+              "date": "2026-07-22",
+              "type": "expense",
+              "cat": "food",
+              "amount": 38372,
+              "note": ""
+            },
+            {
+              "id": "t1784885238612g81",
+              "date": "2026-07-23",
+              "type": "expense",
+              "cat": "food",
+              "amount": 47062,
+              "note": ""
+            },
+            {
+              "id": "t1784885251793esq",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "food",
+              "amount": 55000,
+              "note": ""
+            },
+            {
+              "id": "t17848858066777g2",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784885510727pp",
+              "amount": 522500,
+              "note": "ChatGPT Plus"
+            },
+            {
+              "id": "t1784885829273eae",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784885510727pp",
+              "amount": 75000,
+              "note": "Netflix"
+            },
+            {
+              "id": "t1784885935539e1k",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e17848854577691o",
+              "amount": 1561000,
+              "note": "Tiền nhà"
+            },
+            {
+              "id": "t1784885966672e4g",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "fun",
+              "amount": 4000000,
+              "note": "Du lịch Đà Lạt"
+            },
+            {
+              "id": "t1784886239041ppk",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784885510727pp",
+              "amount": 70000,
+              "note": "Nạp điện thoại"
+            },
+            {
+              "id": "t1784886353102yhc",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 172660,
+              "note": "Mua dưỡng nách cho dợ"
+            },
+            {
+              "id": "t1784886407859u7s",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 69000,
+              "note": "Máy tỉa lông mũi"
+            },
+            {
+              "id": "t1784886569214krh",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 178874,
+              "note": ""
+            },
+            {
+              "id": "t1784886647520ehz",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 32470,
+              "note": "Dép đi văn phòng"
+            },
+            {
+              "id": "t1784886660445a6e",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 168200,
+              "note": "Giá đỡ tai nghe"
+            },
+            {
+              "id": "t17848867316103s5",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 85333,
+              "note": "Bao cao su"
+            },
+            {
+              "id": "t17848867968071js",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "trans",
+              "amount": 750000,
+              "note": "Thay vỏ xe + thay van + thay nhớt"
+            },
+            {
+              "id": "t17848868167414we",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "trans",
+              "amount": 70000,
+              "note": "Xăng"
+            },
+            {
+              "id": "t1784886822750k2c",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "trans",
+              "amount": 70000,
+              "note": "xăng"
+            },
+            {
+              "id": "t1784886865073u3p",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "trans",
+              "amount": 70000,
+              "note": "Xăng"
+            },
+            {
+              "id": "t17848871008184kf",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "other",
+              "amount": 3000000,
+              "note": "Cho ba mẹ bảo hiểm"
+            },
+            {
+              "id": "t1784887154088j67",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "other",
+              "amount": 2164164,
+              "note": "Trả nợ tháng 6"
+            },
+            {
+              "id": "t17848872209336yy",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784884735921po",
+              "amount": 350000,
+              "note": "Mua kem chống nắng cho mẹ + cho dợ luôn"
+            },
+            {
+              "id": "t1784887273319clj",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "fun",
+              "amount": 103000,
+              "note": "Uống cf"
+            },
+            {
+              "id": "t1784887298790jrh",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "fun",
+              "amount": 188000,
+              "note": "Đi ăn Há Cảo"
+            },
+            {
+              "id": "t1784887326538fmk",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "fun",
+              "amount": 546000,
+              "note": "Đồ Thái"
+            },
+            {
+              "id": "t1784887661975one",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "e1784885510727pp",
+              "amount": 149937,
+              "note": "Minimax TTS"
+            },
+            {
+              "id": "t1784888641044ltv",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "other",
+              "amount": 100000,
+              "note": "Tiền vé dự lễ tốt nghiệp"
+            },
+            {
+              "id": "t1784888687290n9q",
+              "date": "2026-07-24",
+              "type": "expense",
+              "cat": "trans",
+              "amount": 32000,
+              "note": "Tiền gửi xe"
+            },
+            {
+              "id": "legacy-salary-2025-01",
+              "date": "2025-01-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 14200000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-02",
+              "date": "2025-02-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-03",
+              "date": "2025-03-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-04",
+              "date": "2025-04-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-05",
+              "date": "2025-05-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-06",
+              "date": "2025-06-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-07",
+              "date": "2025-07-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 14200000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-08",
+              "date": "2025-08-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-09",
+              "date": "2025-09-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-10",
+              "date": "2025-10-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-11",
+              "date": "2025-11-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2025-12",
+              "date": "2025-12-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2026-01",
+              "date": "2026-01-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 14200000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2026-02",
+              "date": "2026-02-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2026-03",
+              "date": "2026-03-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2026-04",
+              "date": "2026-04-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2026-05",
+              "date": "2026-05-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2026-06",
+              "date": "2026-06-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "legacy-salary-2026-07",
+              "date": "2026-07-01",
+              "type": "income",
+              "cat": "salary",
+              "amount": 22500000,
+              "note": "Lương (đã chuyển từ thu nhập cố định)"
+            },
+            {
+              "id": "5a64b2da-4067-4656-b2e8-5445050ee8c5",
+              "date": "2026-04-01",
+              "type": "income",
+              "cat": "refund",
+              "amount": 5000000,
+              "note": "Hoàn tiền thuế"
+            },
+            {
+              "id": "e5d815e3-5ac4-4d50-989b-e45a8f69b8cd",
+              "date": "2026-04-01",
+              "type": "expense",
+              "cat": "other",
+              "amount": 12500000,
+              "note": ""
+            },
+            {
+              "id": "b92273b8-8f8c-44d9-8592-57d3667c174d",
+              "date": "2026-01-01",
+              "type": "income",
+              "cat": "bonus",
+              "amount": 15000000,
+              "note": "Thưởng Tết"
+            },
+            {
+              "id": "924f04d6-6e27-48c7-a697-157a73dc09a9",
+              "date": "2026-01-01",
+              "type": "expense",
+              "cat": "other",
+              "amount": 14200000,
+              "note": ""
+            },
+            {
+              "id": "c4039391-8ef1-411b-a8da-a308787b9839",
+              "date": "2026-02-01",
+              "type": "expense",
+              "cat": "other",
+              "amount": 17500000,
+              "note": ""
+            }
+          ],
+          "incomeCats": [
+            {
+              "id": "salary",
+              "name": "Lương",
+              "color": "#4C9F70"
+            },
+            {
+              "id": "bonus",
+              "name": "Thưởng",
+              "color": "#E6B325"
+            },
+            {
+              "id": "side-income",
+              "name": "Thu nhập phụ",
+              "color": "#118AB2"
+            },
+            {
+              "id": "refund",
+              "name": "Hoàn tiền",
+              "color": "#8A5CC4"
+            },
+            {
+              "id": "income-other",
+              "name": "Khác",
+              "color": "#9C6644"
+            }
+          ]
+        },
+        "market": {
+          "stocks": {},
+          "crypto": {
+            "btc-bitcoin": {
+              "symbol": "BTC",
+              "providerId": "btc-bitcoin",
+              "name": "Bitcoin",
+              "priceUsd": 64155.66673950958,
+              "source": "CoinPaprika",
+              "sourceUrl": "https://docs.coinpaprika.com",
+              "fetchedAt": "2026-07-25T16:48:37.389Z"
+            },
+            "eth-ethereum": {
+              "symbol": "ETH",
+              "providerId": "eth-ethereum",
+              "name": "Ethereum",
+              "priceUsd": 1867.4473412923878,
+              "source": "CoinPaprika",
+              "sourceUrl": "https://docs.coinpaprika.com",
+              "fetchedAt": "2026-07-25T16:48:37.470Z"
+            },
+            "sol-solana": {
+              "symbol": "SOL",
+              "providerId": "sol-solana",
+              "name": "Solana",
+              "priceUsd": 74.27321627837894,
+              "source": "CoinPaprika",
+              "sourceUrl": "https://docs.coinpaprika.com",
+              "fetchedAt": "2026-07-25T16:48:37.559Z"
+            },
+            "bnb-bnb": {
+              "symbol": "BNB",
+              "providerId": "bnb-bnb",
+              "name": "BNB",
+              "priceUsd": 567.5119809366066,
+              "source": "CoinPaprika",
+              "sourceUrl": "https://docs.coinpaprika.com",
+              "fetchedAt": "2026-07-25T16:48:37.826Z"
+            }
+          },
+          "cryptoSymbols": {
+            "BTC": "btc-bitcoin",
+            "ETH": "eth-ethereum",
+            "SOL": "sol-solana",
+            "BNB": "bnb-bnb"
+          },
+          "matches": {},
+          "errors": [],
+          "fx": {
+            "usdVnd": 26278.143309,
+            "source": "ExchangeRate-API",
+            "sourceUrl": "https://www.exchangerate-api.com",
+            "fetchedAt": "2026-07-25T16:48:36.053Z"
+          },
+          "gold": {
+            "symbol": "XAU",
+            "xauUsdPerTroyOunce": 4053.699951,
+            "vndPerChi": 12843062.802395165,
+            "source": "Gold API",
+            "sourceUrl": "https://gold-api.com",
+            "fetchedAt": "2026-07-25T16:48:38.636Z"
+          },
+          "updatedAt": "2026-07-25T16:48:35.836Z"
+        },
+        "stocks": {
+          "HOSE:FPT": {
+            "symbol": "FPT",
+            "exchange": "HOSE",
+            "priceVnd": 62900,
+            "source": "CafeF",
+            "sourceUrl": "https://cafef.vn/du-lieu/",
+            "fetchedAt": "2026-07-25T07:11:47.211Z"
+          },
+          "HOSE:MWG": {
+            "symbol": "MWG",
+            "exchange": "HOSE",
+            "priceVnd": 68000,
+            "source": "CafeF",
+            "sourceUrl": "https://cafef.vn/du-lieu/",
+            "fetchedAt": "2026-07-25T07:12:00.811Z"
+          }
+        },
+        "crypto": {
+          "btc-bitcoin": {
+            "symbol": "BTC",
+            "providerId": "btc-bitcoin",
+            "name": "Bitcoin",
+            "priceUsd": 64137.7174925933,
+            "source": "CoinPaprika",
+            "sourceUrl": "https://docs.coinpaprika.com",
+            "fetchedAt": "2026-07-25T14:53:43.901Z"
+          },
+          "eth-ethereum": {
+            "symbol": "ETH",
+            "providerId": "eth-ethereum",
+            "name": "Ethereum",
+            "priceUsd": 1866.0285010061532,
+            "source": "CoinPaprika",
+            "sourceUrl": "https://docs.coinpaprika.com",
+            "fetchedAt": "2026-07-25T14:53:43.984Z"
+          },
+          "sol-solana": {
+            "symbol": "SOL",
+            "providerId": "sol-solana",
+            "name": "Solana",
+            "priceUsd": 73.89699252831312,
+            "source": "CoinPaprika",
+            "sourceUrl": "https://docs.coinpaprika.com",
+            "fetchedAt": "2026-07-25T14:53:44.249Z"
+          },
+          "bnb-bnb": {
+            "symbol": "BNB",
+            "providerId": "bnb-bnb",
+            "name": "BNB",
+            "priceUsd": 566.4067174840915,
+            "source": "CoinPaprika",
+            "sourceUrl": "https://docs.coinpaprika.com",
+            "fetchedAt": "2026-07-25T14:53:44.664Z"
+          }
+        },
+        "cryptoSymbols": {
+          "BTC": "btc-bitcoin",
+          "ETH": "eth-ethereum",
+          "SOL": "sol-solana",
+          "BNB": "bnb-bnb"
+        },
+        "matches": {
+          "crypto:SOL": [
+            {
+              "id": "sol-solana",
+              "symbol": "SOL",
+              "name": "Solana",
+              "rank": 7
+            },
+            {
+              "id": "sol-binance-peg-sol",
+              "symbol": "SOL",
+              "name": "Binance-Peg SOL",
+              "rank": 265
+            }
+          ]
+        },
+        "fx": {
+          "usdVnd": 26278.143309,
+          "source": "ExchangeRate-API",
+          "sourceUrl": "https://www.exchangerate-api.com",
+          "fetchedAt": "2026-07-25T14:53:43.760Z"
+        },
+        "gold": {
+          "symbol": "XAU",
+          "xauUsdPerTroyOunce": 4053.699951,
+          "vndPerChi": 12843062.802395165,
+          "source": "Gold API",
+          "sourceUrl": "https://gold-api.com",
+          "fetchedAt": "2026-07-25T14:53:46.033Z"
+        },
+        "errors": [],
+        "lastUpdated": "2026-07-25T14:54:18.372Z",
+        "financialProfile": {
+          "monthlyIncome": 22500000,
+          "monthlyBudgets": {
+            "food": 3000000,
+            "trans": 600000,
+            "fun": 2000000,
+            "other": 1000000,
+            "e1784884735921po": 2000000,
+            "e17848854577691o": 3000000,
+            "e1784885510727pp": 900000
+          },
+          "fundPlan": {
+            "dp": 0,
+            "dt": 0,
+            "vang": 0,
+            "cr": 0
+          },
+          "emergencyFundGoal": 0,
+          "openingBalances": {
+            "dp": 0,
+            "dt": 0,
+            "vang": 0,
+            "cr": 0
+          },
+          "debt": {
+            "balance": 0,
+            "monthlyPayment": 0
+          }
+        },
+        "onboarding": {
+          "status": "skipped",
+          "version": 1,
+          "skippedAt": "2026-07-25T14:02:53.379Z"
+        },
+        "incomeMigrationVersion": 1,
+        "futureIncomeResetVersion": 1
+      },
+      "createdAt": "2026-07-25T08:00:41.206Z",
+      "updatedAt": "2026-07-25T17:12:40.971Z"
+    }
+  }
+}

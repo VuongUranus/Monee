@@ -1,0 +1,12 @@
+{
+  "name": "@chi-tieu/shared",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+.env
+AGENT.md
+node_modules/
+**/dist/
+**/*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
+.DS_Store
+npm-debug.log*
