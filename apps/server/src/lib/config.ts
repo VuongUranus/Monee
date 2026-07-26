@@ -8,7 +8,8 @@ export interface AppConfig {
   googleClientId: string;
   googleClientSecret: string;
   sessionSecret: string;
-  databasePath: string;
+  databaseUrl: string;
+  databaseMigrationUrl: string;
   workspaceRoot: string;
   webRoot: string;
   secureCookies: boolean;
@@ -52,7 +53,7 @@ export function loadEnvironment(workspaceRoot: string, base: AppEnvironment = pr
 export function createConfig(
   workspaceRoot: string,
   env: AppEnvironment,
-  overrides: Partial<Pick<AppConfig, "databasePath" | "host" | "port" | "webRoot">> = {},
+  overrides: Partial<Pick<AppConfig, "databaseUrl" | "host" | "port" | "webRoot">> = {},
 ): AppConfig {
   const host = overrides.host ?? "127.0.0.1";
   const port = overrides.port ?? Number(env.PORT || 3000);
@@ -67,7 +68,8 @@ export function createConfig(
     googleClientId,
     googleClientSecret,
     sessionSecret,
-    databasePath: overrides.databasePath ?? path.join(workspaceRoot, "data.json"),
+    databaseUrl: overrides.databaseUrl ?? env.DATABASE_URL ?? "",
+    databaseMigrationUrl: env.DATABASE_MIGRATION_URL ?? "",
     workspaceRoot,
     webRoot: overrides.webRoot ?? path.join(workspaceRoot, "apps", "web"),
     secureCookies: appBaseUrl.startsWith("https://"),

@@ -6,20 +6,16 @@ import { DateField } from "@/components/DateField";
 import { Modal } from "@/components/Modal";
 import { MoneyInput } from "@/components/MoneyInput";
 import { Select } from "@/components/Select";
+import { api } from "@/lib/api";
 import {
   categoriesForType,
   accountForTransaction,
-  countsInPersonalReports,
-  expenseByAccount,
   categoryForTransaction,
   fmt,
   monthKey,
-  monthTransactions,
   MONTHS_FULL,
   PALETTE,
   slugId,
-  totalFundsForMonth,
-  totalIncomeForMonth,
 } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
 
@@ -39,7 +35,11 @@ export function ExpensesPage() {
   const ledger = useFinanceStore((state) => state.ledger);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
-  const updateLedger = useFinanceStore((state) => state.updateLedger);
+  const expenseSummary = useFinanceStore((state) => state.expenseSummary);
+  const transactionPage = useFinanceStore((state) => state.transactionPage);
+  const loadExpenses = useFinanceStore((state) => state.loadExpenses);
+  const loadTransactions = useFinanceStore((state) => state.loadTransactions);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const [managing, setManaging] = useState(false);
   const [managingAccounts, setManagingAccounts] = useState(false);
   const [type, setType] = useState<TransactionType>("expense");
@@ -69,6 +69,41 @@ export function ExpensesPage() {
     setHistoryPage(1);
   }, [filters]);
 
+  useEffect(() => {
+    void loadExpenses();
+  }, [loadExpenses, month, year]);
+
+  useEffect(() => {
+    if (!expenseSummary || expenseSummary.year !== year || expenseSummary.month !== month + 1) return;
+    const timer = window.setTimeout(() => {
+      void loadTransactions({
+        from: filters.from || minDate,
+        to: filters.to || maxDate,
+        ...(filters.type ? { type: filters.type } : {}),
+        ...(filters.category ? { categoryId: filters.category } : {}),
+        ...(filters.account ? { accountId: filters.account } : {}),
+        ...(filters.search.trim() ? { q: filters.search.trim() } : {}),
+        page: historyPage,
+        pageSize: HISTORY_PAGE_SIZE,
+      });
+    }, filters.search ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    expenseSummary,
+    filters.account,
+    filters.category,
+    filters.from,
+    filters.search,
+    filters.to,
+    filters.type,
+    historyPage,
+    loadTransactions,
+    maxDate,
+    minDate,
+    month,
+    year,
+  ]);
+
   const entryCategories = categoriesForType(ledger, type);
   const selectedCategory = entryCategories.some((item) => item.id === category)
     ? category
@@ -76,47 +111,38 @@ export function ExpensesPage() {
   const selectedAccount = ledger.expense.accounts.some((item) => item.id === account) ? account : "";
   const accountOptions = accountSelectOptions(ledger.expense.accounts);
 
-  const transactions = monthTransactions(ledger, year, month);
-  const income = totalIncomeForMonth(ledger, year, month);
-  const expenseTransactions = transactions.filter((transaction) => transaction.type === "expense");
-  const spent = expenseTransactions.reduce((sum, transaction) => sum + transaction.amount, 0);
-  const funds = totalFundsForMonth(ledger, year, month, countsInPersonalReports);
-  const balance = income - spent - funds;
+  const transactions = transactionPage?.items ?? [];
+  const income = expenseSummary?.income ?? 0;
+  const spent = expenseSummary?.spent ?? 0;
+  const funds = expenseSummary?.funds ?? 0;
+  const balance = expenseSummary?.balance ?? 0;
   const totalBudget = ledger.expense.cats.reduce((sum, item) => sum + (item.budget ?? 0), 0);
-  const byExpenseCategory = groupByCategory(expenseTransactions);
-  const accountExpenses = expenseByAccount(ledger, expenseTransactions);
-  const incomeTransactions = transactions.filter((transaction) => transaction.type === "income");
-  const byIncomeCategory = groupByCategory(incomeTransactions);
+  const byExpenseCategory = expenseSummary?.byExpenseCategory ?? {};
+  const accountExpenses = expenseSummary?.accountExpenses ?? [];
+  const byIncomeCategory = expenseSummary?.byIncomeCategory ?? {};
   const overBudget = ledger.expense.cats.filter((item) => (item.budget ?? 0) > 0 && (byExpenseCategory[item.id] ?? 0) > (item.budget ?? 0));
 
-  const filtered = transactions.filter((transaction) => {
-    if (filters.from && transaction.date < filters.from) return false;
-    if (filters.to && transaction.date > filters.to) return false;
-    if (filters.type && transaction.type !== filters.type) return false;
-    if (filters.category && transaction.cat !== filters.category) return false;
-    if (filters.account && transaction.accountId !== filters.account) return false;
-    if (filters.search && !transaction.note.toLocaleLowerCase("vi").includes(filters.search.toLocaleLowerCase("vi"))) return false;
-    return true;
-  }).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-  const historyPageCount = Math.max(1, Math.ceil(filtered.length / HISTORY_PAGE_SIZE));
-  const currentHistoryPage = Math.min(historyPage, historyPageCount);
-  const pagedTransactions = filtered.slice((currentHistoryPage - 1) * HISTORY_PAGE_SIZE, currentHistoryPage * HISTORY_PAGE_SIZE);
-  const historyStart = filtered.length ? (currentHistoryPage - 1) * HISTORY_PAGE_SIZE + 1 : 0;
-  const historyEnd = Math.min(currentHistoryPage * HISTORY_PAGE_SIZE, filtered.length);
+  const historyTotal = transactionPage?.total ?? 0;
+  const historyPageCount = transactionPage?.pageCount ?? 1;
+  const currentHistoryPage = transactionPage?.page ?? historyPage;
+  const pagedTransactions = transactionPage?.items ?? [];
+  const historyStart = historyTotal ? (currentHistoryPage - 1) * HISTORY_PAGE_SIZE + 1 : 0;
+  const historyEnd = Math.min(currentHistoryPage * HISTORY_PAGE_SIZE, historyTotal);
 
   const addTransaction = (): void => {
     if (!(amount > 0) || !date || !selectedCategory) return;
-    updateLedger((draft) => {
-      draft.expense.txns.push({
-        id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
-        date,
-        type,
-        cat: selectedCategory,
-        ...(selectedAccount ? { accountId: selectedAccount } : {}),
-        amount,
-        note: note.trim(),
-      });
-    });
+    const transaction = {
+      id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+      date,
+      type,
+      cat: selectedCategory,
+      ...(selectedAccount ? { accountId: selectedAccount } : {}),
+      amount,
+      note: note.trim(),
+    };
+    mutateLedger((draft) => {
+      draft.expense.txns.push(transaction);
+    }, (expectedRevision) => api.createTransaction(transaction, expectedRevision));
     setAmount(0);
     setNote("");
   };
@@ -259,7 +285,7 @@ export function ExpensesPage() {
           </label>
           <label>Tìm ghi chú<input value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} /></label>
           <button className="btn sm" type="button" disabled={JSON.stringify(filters) === JSON.stringify(emptyFilters)} onClick={() => setFilters(emptyFilters)}>Xóa lọc</button>
-          <p className="history-filter-count">Hiển thị {filtered.length}/{transactions.length} khoản{filtered.length ? ` · ${historyStart}–${historyEnd}` : ""}</p>
+          <p className="history-filter-count">Có {historyTotal} khoản{historyTotal ? ` · ${historyStart}–${historyEnd}` : ""}</p>
         </div>
         <div className="table-scroll">
           <table className="history-table">
@@ -279,18 +305,18 @@ export function ExpensesPage() {
                     <td>{transaction.accountId ? accountForTransaction(ledger, transaction)?.name ?? "(đã xóa)" : "Chưa xác định"}</td>
                     <td>{transaction.note}</td>
                     <td className={`amt-${transaction.type}`}>{transaction.type === "income" ? "+" : "−"}{fmt(transaction.amount)}</td>
-                    <td><button className="tx-edit" type="button" aria-label="Sửa giao dịch" onClick={() => setEditingId(transaction.id)}>✎</button><button className="tx-del" type="button" aria-label="Xóa giao dịch" onClick={() => updateLedger((draft) => { draft.expense.txns = draft.expense.txns.filter((item) => item.id !== transaction.id); })}>×</button></td>
+                    <td><button className="tx-edit" type="button" aria-label="Sửa giao dịch" onClick={() => setEditingId(transaction.id)}>✎</button><button className="tx-del" type="button" aria-label="Xóa giao dịch" onClick={() => mutateLedger((draft) => { draft.expense.txns = draft.expense.txns.filter((item) => item.id !== transaction.id); }, (expectedRevision) => api.deleteTransaction(transaction.id, expectedRevision))}>×</button></td>
                   </tr>
                 ))}
             </tbody>
           </table>
         </div>
-        {filtered.length > HISTORY_PAGE_SIZE ? <nav className="history-pagination" aria-label="Phân trang lịch sử">
+        {historyTotal > HISTORY_PAGE_SIZE ? <nav className="history-pagination" aria-label="Phân trang lịch sử">
           <button className="btn sm" type="button" disabled={currentHistoryPage === 1} onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}>← Trước</button>
           <span>Trang {currentHistoryPage}/{historyPageCount}</span>
           <button className="btn sm" type="button" disabled={currentHistoryPage === historyPageCount} onClick={() => setHistoryPage((page) => Math.min(historyPageCount, page + 1))}>Sau →</button>
         </nav> : null}
-        {!filtered.length ? <div className="empty-state">{transactions.length ? "Không tìm thấy giao dịch phù hợp." : "Chưa có khoản nào trong tháng này."}</div> : null}
+        {!historyTotal ? <div className="empty-state">{JSON.stringify(filters) !== JSON.stringify(emptyFilters) ? "Không tìm thấy giao dịch phù hợp." : "Chưa có khoản nào trong tháng này."}</div> : null}
       </article>
 
       {managing ? <CategoryManager onClose={() => setManaging(false)} /> : null}
@@ -301,13 +327,6 @@ export function ExpensesPage() {
 
 function accountSelectOptions(accounts: Account[]): Array<{ value: string; label: string }> {
   return [{ value: "", label: "Chưa xác định" }, ...accounts.map((item) => ({ value: item.id, label: item.name }))];
-}
-
-function groupByCategory(transactions: Transaction[]): Record<string, number> {
-  return transactions.reduce<Record<string, number>>((result, transaction) => {
-    result[transaction.cat] = (result[transaction.cat] ?? 0) + transaction.amount;
-    return result;
-  }, {});
 }
 
 function Stat({ label, value, meta, accent }: { label: string; value: string; meta: string; accent: "gold" | "green" | "rust" | "blue" }) {
@@ -331,7 +350,7 @@ function CategoryDonut({ categories, amounts, empty, compact = false }: { catego
 
 function EditTransactionRow({ transaction, onDone }: { transaction: Transaction; onDone(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
-  const updateLedger = useFinanceStore((state) => state.updateLedger);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const [draft, setDraft] = useState(structuredClone(transaction));
   const categories = categoriesForType(ledger, draft.type);
   const accountOptions = accountSelectOptions(ledger.expense.accounts);
@@ -378,10 +397,10 @@ function EditTransactionRow({ transaction, onDone }: { transaction: Transaction;
       <td><MoneyInput value={draft.amount} allowZero={false} onCommit={(amount) => setDraft({ ...draft, amount })} /></td>
       <td><button className="tx-save" type="button" aria-label="Lưu giao dịch" onClick={() => {
         if (!(draft.amount > 0)) return;
-        updateLedger((store) => {
+        mutateLedger((store) => {
           const index = store.expense.txns.findIndex((item) => item.id === transaction.id);
           if (index >= 0) store.expense.txns[index] = draft;
-        });
+        }, (expectedRevision) => api.updateTransaction(transaction.id, draft, expectedRevision));
         onDone();
       }}>✓</button><button className="tx-cancel" type="button" aria-label="Hủy chỉnh sửa" onClick={onDone}>×</button></td>
     </tr>
@@ -391,6 +410,7 @@ function EditTransactionRow({ transaction, onDone }: { transaction: Transaction;
 function CategoryManager({ onClose }: { onClose(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const [tab, setTab] = useState<TransactionType>("expense");
   const [name, setName] = useState("");
   const [color, setColor] = useState(PALETTE[0]!);
@@ -398,24 +418,26 @@ function CategoryManager({ onClose }: { onClose(): void }) {
 
   const add = (): void => {
     if (!name.trim()) return;
-    updateLedger((draft) => {
+    mutateLedger((draft) => {
       const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
       let id = slugId(name);
       let suffix = 2;
       while (target.some((item) => item.id === id)) id = `${slugId(name)}-${suffix++}`;
       target.push({ id, name: name.trim(), color, ...(tab === "expense" ? { budget: 0 } : {}) });
-    });
+    }, (expectedRevision) => api.createCategory({ type: tab, name: name.trim(), color, ...(tab === "expense" ? { budget: 0 } : {}) }, expectedRevision));
     setName("");
   };
 
   const move = (index: number, direction: number): void => {
     const next = index + direction;
     if (next < 0 || next >= categories.length) return;
-    updateLedger((draft) => {
+    const ids = categories.map((item) => item.id);
+    [ids[index], ids[next]] = [ids[next]!, ids[index]!];
+    mutateLedger((draft) => {
       const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
       const [item] = target.splice(index, 1);
       if (item) target.splice(next, 0, item);
-    });
+    }, (expectedRevision) => api.reorderCategories(tab, ids, expectedRevision));
   };
 
   return (
@@ -428,22 +450,28 @@ function CategoryManager({ onClose }: { onClose(): void }) {
         {categories.map((item, index) => (
           <div className="manager-row category-row" key={item.id}>
             <div className="reorder-actions"><button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" disabled={index === categories.length - 1} onClick={() => move(index, 1)}>↓</button></div>
-            <input type="color" value={item.color} aria-label={`Màu ${item.name}`} onChange={(event) => updateLedger((draft) => {
-              const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
-              target[index]!.color = event.target.value;
-            })} />
+            <input type="color" value={item.color} aria-label={`Màu ${item.name}`} onChange={(event) => {
+              const nextColor = event.target.value;
+              mutateLedger((draft) => {
+                const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
+                target[index]!.color = nextColor;
+              }, (expectedRevision) => api.updateCategory(tab, item.id, { color: nextColor }, expectedRevision));
+            }} />
             <input value={item.name} onChange={(event) => updateLedger((draft) => {
               const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
               target[index]!.name = event.target.value;
-            }, false)} onBlur={() => updateLedger(() => undefined)} />
-            {tab === "expense" ? <MoneyInput value={item.budget ?? 0} onCommit={(budget) => updateLedger((draft) => {
+            })} onBlur={(event) => {
+              const nextName = event.currentTarget.value.trim();
+              if (nextName) mutateLedger(() => undefined, (expectedRevision) => api.updateCategory(tab, item.id, { name: nextName }, expectedRevision));
+            }} />
+            {tab === "expense" ? <MoneyInput value={item.budget ?? 0} onCommit={(budget) => mutateLedger((draft) => {
               draft.expense.cats[index]!.budget = budget;
               draft.financialProfile.monthlyBudgets[item.id] = budget;
-            })} /> : <span />}
-            <button className="btn sm danger" type="button" disabled={categories.length <= 1} onClick={() => updateLedger((draft) => {
+            }, (expectedRevision) => api.updateCategory(tab, item.id, { budget }, expectedRevision))} /> : <span />}
+            <button className="btn sm danger" type="button" disabled={categories.length <= 1} onClick={() => mutateLedger((draft) => {
               const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
               target.splice(index, 1);
-            })}>Xóa</button>
+            }, (expectedRevision) => api.deleteCategory(tab, item.id, expectedRevision))}>Xóa</button>
           </div>
         ))}
       </div>
@@ -459,6 +487,7 @@ function CategoryManager({ onClose }: { onClose(): void }) {
 function AccountManager({ onClose }: { onClose(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const [tab, setTab] = useState<"accounts" | "types">("accounts");
   const [name, setName] = useState("");
   const [typeId, setTypeId] = useState(ledger.expense.accountTypes[0]?.id ?? "");
@@ -476,7 +505,7 @@ function AccountManager({ onClose }: { onClose(): void }) {
 
   const add = (): void => {
     if (!name.trim()) return;
-    updateLedger((draft) => {
+    mutateLedger((draft) => {
       if (isAccounts) {
         draft.expense.accounts.push({
           id: uniqueId(name, draft.expense.accounts.map((item) => item.id)),
@@ -489,7 +518,9 @@ function AccountManager({ onClose }: { onClose(): void }) {
           name: name.trim(),
         });
       }
-    });
+    }, (expectedRevision) => isAccounts
+      ? api.createAccount({ name: name.trim(), ...(selectedTypeId ? { typeId: selectedTypeId } : {}) }, expectedRevision)
+      : api.createAccountType(name.trim(), expectedRevision));
     setName("");
   };
 
@@ -497,11 +528,15 @@ function AccountManager({ onClose }: { onClose(): void }) {
     const target = isAccounts ? ledger.expense.accounts : ledger.expense.accountTypes;
     const next = index + direction;
     if (next < 0 || next >= target.length) return;
-    updateLedger((draft) => {
+    const ids = target.map((item) => item.id);
+    [ids[index], ids[next]] = [ids[next]!, ids[index]!];
+    mutateLedger((draft) => {
       const collection = isAccounts ? draft.expense.accounts : draft.expense.accountTypes;
       const [item] = collection.splice(index, 1);
       if (item) collection.splice(next, 0, item);
-    });
+    }, (expectedRevision) => isAccounts
+      ? api.reorderAccounts(ids, expectedRevision)
+      : api.reorderAccountTypes(ids, expectedRevision));
   };
 
   return (
@@ -517,21 +552,24 @@ function AccountManager({ onClose }: { onClose(): void }) {
             <span className="account-manager-icon" aria-hidden="true">◫</span>
             <input aria-label={`Tên ${account.name}`} value={account.name} onChange={(event) => updateLedger((draft) => {
               draft.expense.accounts[index]!.name = event.target.value;
-            }, false)} onBlur={() => updateLedger(() => undefined)} />
+            })} onBlur={(event) => {
+              const nextName = event.currentTarget.value.trim();
+              if (nextName) mutateLedger(() => undefined, (expectedRevision) => api.updateAccount(account.id, { name: nextName }, expectedRevision));
+            }} />
             <Select
               value={account.typeId ?? ""}
               options={typeOptions}
-              onValueChange={(nextTypeId) => updateLedger((draft) => {
+              onValueChange={(nextTypeId) => mutateLedger((draft) => {
                 const target = draft.expense.accounts[index]!;
                 if (nextTypeId) target.typeId = nextTypeId;
                 else delete target.typeId;
-              })}
+              }, (expectedRevision) => api.updateAccount(account.id, { typeId: nextTypeId || null }, expectedRevision))}
               ariaLabel={`Loại ${account.name}`}
               compact
             />
-            <button className="btn sm danger" type="button" onClick={() => updateLedger((draft) => {
+            <button className="btn sm danger" type="button" onClick={() => mutateLedger((draft) => {
               draft.expense.accounts.splice(index, 1);
-            })}>Xóa</button>
+            }, (expectedRevision) => api.deleteAccount(account.id, expectedRevision))}>Xóa</button>
           </div>
         )) : ledger.expense.accountTypes.map((type, index) => (
           <div className="manager-row account-type-row" key={type.id}>
@@ -539,12 +577,15 @@ function AccountManager({ onClose }: { onClose(): void }) {
             <span className="account-manager-icon" aria-hidden="true">▤</span>
             <input aria-label={`Tên loại ${type.name}`} value={type.name} onChange={(event) => updateLedger((draft) => {
               draft.expense.accountTypes[index]!.name = event.target.value;
-            }, false)} onBlur={() => updateLedger(() => undefined)} />
+            })} onBlur={(event) => {
+              const nextName = event.currentTarget.value.trim();
+              if (nextName) mutateLedger(() => undefined, (expectedRevision) => api.updateAccountType(type.id, nextName, expectedRevision));
+            }} />
             <span />
-            <button className="btn sm danger" type="button" onClick={() => updateLedger((draft) => {
+            <button className="btn sm danger" type="button" onClick={() => mutateLedger((draft) => {
               draft.expense.accountTypes.splice(index, 1);
               for (const account of draft.expense.accounts) if (account.typeId === type.id) delete account.typeId;
-            })}>Xóa</button>
+            }, (expectedRevision) => api.deleteAccountType(type.id, expectedRevision))}>Xóa</button>
           </div>
         ))}
       </div>

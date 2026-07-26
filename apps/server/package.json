@@ -6,18 +6,29 @@
   "scripts": {
     "dev": "tsx watch --exclude '../web/node_modules/.vite-temp/**' src/index.ts --dev",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:import-json": "tsx src/db/import-json.ts",
+    "db:verify-json": "tsx src/db/verify-json.ts"
   },
   "dependencies": {
     "@chi-tieu/shared": "3.0.0",
+    "@fastify/compress": "^8.3.1",
     "@fastify/cookie": "^11.1.2",
     "@fastify/static": "^10.1.2",
     "dotenv": "^17.2.1",
+    "drizzle-orm": "^0.45.2",
     "fastify": "^5.10.0",
-    "fastify-plugin": "^5.0.1"
+    "fastify-plugin": "^5.0.1",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@fastify/vite": "^9.1.0",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "testcontainers": "^12.0.4",
     "tsx": "^4.20.3"
   }
 }

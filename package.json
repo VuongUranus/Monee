@@ -11,14 +11,18 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "npm run dev -w @chi-tieu/server",
-    "build": "npm run typecheck && npm run build -w @chi-tieu/web && npm run build -w @chi-tieu/server",
+    "dev": "npm run build -w @chi-tieu/shared && npm run dev -w @chi-tieu/server",
+    "build": "npm run build -w @chi-tieu/shared && npm run typecheck && npm run build -w @chi-tieu/web && npm run build -w @chi-tieu/server",
     "start": "npm run start -w @chi-tieu/server",
     "lint": "eslint .",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "db:generate": "npm run db:generate -w @chi-tieu/server",
+    "db:migrate": "npm run db:migrate -w @chi-tieu/server",
+    "db:import-json": "npm run db:import-json -w @chi-tieu/server --",
+    "db:verify-json": "npm run db:verify-json -w @chi-tieu/server --"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

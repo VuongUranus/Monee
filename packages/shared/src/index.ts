@@ -145,6 +145,7 @@ export interface FinancialProfile {
 export interface OnboardingState {
   status: "pending" | "completed" | "skipped";
   version: number;
+  skippedAt?: string;
 }
 
 export interface FxQuote {
@@ -246,6 +247,12 @@ export interface MarketQuotesResponse {
   errors: MarketQuoteError[];
 }
 
+export interface PersistedMarketQuotesResponse {
+  quotes: MarketQuotesResponse;
+  workspaceRevision: number;
+  affectedPeriods: string[];
+}
+
 export interface UserDatabaseRecord {
   profile: UserProfile;
   data: StoredFinancePayload;
@@ -297,9 +304,258 @@ export interface SharedFundView {
   members?: Array<{ user: Pick<UserProfile, "sub" | "name" | "email">; role: SharedFundRole }>;
 }
 
-export interface FinanceWorkspaceResponse {
-  data: StoredFinancePayload;
-  sharedFunds: SharedFundView[];
+export interface FinancePreferences {
+  showGoals: boolean;
+  onboarding: OnboardingState;
+  financialProfile: Pick<
+    FinancialProfile,
+    "monthlyIncome" | "emergencyFundGoal" | "debt"
+  >;
+  incomeMigrationVersion: number;
+  futureIncomeResetVersion: number;
+  usdRate?: number;
+}
+
+export interface FinanceBootstrapResponse {
+  user: UserProfile;
+  workspaceRevision: number;
+  preferences: FinancePreferences;
+  availableYears: number[];
+}
+
+export interface PersonalMutationResponse<T> {
+  data: T;
+  workspaceRevision: number;
+}
+
+export interface SharedMutationResponse<T> {
+  data: T;
+  revision: number;
+}
+
+export interface DeleteMutationResult {
+  deletedId: string;
+}
+
+export interface ExpenseConfigResponse {
+  categories: FinanceCategory[];
+  incomeCategories: FinanceCategory[];
+  accountTypes: AccountType[];
+  accounts: Account[];
+}
+
+export interface ExpenseBreakdownEntry {
+  id: string;
+  name: string;
+  color: string;
+  amount: number;
+}
+
+export interface ExpenseMonthSummaryResponse {
+  year: number;
+  month: number;
+  income: number;
+  spent: number;
+  funds: number;
+  balance: number;
+  byExpenseCategory: Record<string, number>;
+  byIncomeCategory: Record<string, number>;
+  accountExpenses: ExpenseBreakdownEntry[];
+}
+
+export interface TransactionQuery {
+  from: string;
+  to: string;
+  type?: TransactionType;
+  categoryId?: string;
+  accountId?: string;
+  q?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface TransactionPageResponse {
+  items: Transaction[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+}
+
+export interface FundOverviewItem extends Fund {
+  revision?: number;
+  role?: "owner" | SharedFundRole;
+  owner?: Pick<UserProfile, "sub" | "name" | "email">;
+  fundPlan: number;
+  openingBalance: number;
+  yearGoal: number;
+  allGoal: number;
+  monthAmount: number;
+  yearAmounts: number[];
+  yearTotal: number;
+  allTimeTotal: number;
+  contributionAmount: number;
+  contributionCount: number;
+}
+
+export interface FundOverviewResponse {
+  year: number;
+  month: number;
+  note: string;
+  income: number;
+  yearActiveMonths: number;
+  allTimeActiveMonths: number;
+  showGoals: boolean;
+  debt: FinancialProfile["debt"];
+  funds: FundOverviewItem[];
+  marketAssets: MarketAssetRequest[];
+  market: StoredMarketState;
+}
+
+export interface FundMonthDetailResponse {
+  fundId: string;
+  year: number;
+  month: number;
+  amount: number;
+  detail: FundDetail;
+}
+
+export interface SharedFundMembersResponse {
+  fundId: string;
+  revision: number;
+  members: Array<{ user: Pick<UserProfile, "sub" | "name" | "email">; role: SharedFundRole }>;
+}
+
+export interface SharedFundContributionsResponse {
+  fundId: string;
+  revision: number;
+  period: string;
+  contributors: Record<string, Pick<UserProfile, "sub" | "name" | "email">>;
+  items: SharedFundContribution[];
+}
+
+export type StatisticsScope =
+  | { mode: "all" }
+  | { mode: "year"; year: number }
+  | { mode: "month"; month: string }
+  | { mode: "range"; from: string; to: string };
+
+export interface StatisticsMonthRow {
+  year: number;
+  month: number;
+  key: string;
+  income: number;
+  spent: number;
+  funds: number;
+  balance: number;
+  byFund: Record<string, number>;
+}
+
+export interface StatisticsResponse {
+  scope: StatisticsScope;
+  availableYears: number[];
+  funds: Array<Pick<Fund, "id" | "name" | "color">>;
+  rows: StatisticsMonthRow[];
+  totals: {
+    income: number;
+    spent: number;
+    funds: number;
+    balance: number;
+  };
+  expenseBreakdown: ExpenseBreakdownEntry[];
+  incomeBreakdown: ExpenseBreakdownEntry[];
+  accountExpenses: ExpenseBreakdownEntry[];
+}
+
+export interface ExpectedRevisionRequest {
+  expectedRevision: number;
+}
+
+export interface PreferencesMutationRequest extends ExpectedRevisionRequest {
+  showGoals?: boolean;
+  financialProfile?: {
+    monthlyIncome?: number;
+    emergencyFundGoal?: number;
+    debtBalance?: number;
+    debtMonthlyPayment?: number;
+  };
+  onboarding?: OnboardingState;
+}
+
+export interface FundCreateRequest extends ExpectedRevisionRequest {
+  name: string;
+  color: string;
+  category: FundCategory;
+}
+
+export interface FundPatchRequest extends ExpectedRevisionRequest {
+  name?: string;
+  color?: string;
+  category?: FundCategory;
+  fundPlan?: number;
+  openingBalance?: number;
+}
+
+export interface FundMonthMutationRequest extends ExpectedRevisionRequest {
+  amount: number;
+  detail?: FundDetail;
+}
+
+export interface FundGoalMutationRequest extends ExpectedRevisionRequest {
+  year: number | null;
+  amount: number;
+}
+
+export interface TransactionMutationRequest extends ExpectedRevisionRequest {
+  transaction: Omit<Transaction, "id"> & { id?: string };
+}
+
+export interface CategoryCreateRequest extends ExpectedRevisionRequest {
+  type: TransactionType;
+  name: string;
+  color: string;
+  budget?: number;
+}
+
+export interface CategoryPatchRequest extends ExpectedRevisionRequest {
+  name?: string;
+  color?: string;
+  budget?: number;
+}
+
+export interface AccountCreateRequest extends ExpectedRevisionRequest {
+  name: string;
+  typeId?: string;
+}
+
+export interface AccountPatchRequest extends ExpectedRevisionRequest {
+  name?: string;
+  typeId?: string | null;
+}
+
+export interface ReorderMutationRequest extends ExpectedRevisionRequest {
+  ids: string[];
+}
+
+export interface SharedFundRevisionRequest {
+  revision: number;
+}
+
+export interface SharedFundCreateRequest extends ExpectedRevisionRequest {
+  fundId: string;
+  email: string;
+  role: SharedFundRole;
+}
+
+export interface SharedFundMemberMutationRequest extends SharedFundRevisionRequest {
+  email: string;
+  role: SharedFundRole;
+}
+
+export interface SharedFundContributionRequest extends SharedFundRevisionRequest {
+  month: string;
+  amount: number;
+  note: string;
 }
 
 export interface UserDatabase {
@@ -307,3 +563,6 @@ export interface UserDatabase {
   users: Record<string, UserDatabaseRecord>;
   sharedFunds?: Record<string, SharedFundRecord>;
 }
+
+export * from "./normalization.js";
+export * from "./market-state.js";

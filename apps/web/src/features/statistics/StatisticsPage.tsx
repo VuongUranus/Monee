@@ -1,20 +1,14 @@
-import type { FinanceCategory, TransactionType } from "@chi-tieu/shared";
+import { useEffect } from "react";
+import type { FinanceCategory } from "@chi-tieu/shared";
 import { AccountExpenseChart } from "@/components/AccountExpenseChart";
 import { DonutChart, FinanceBarChart } from "@/components/Charts";
 import { Select } from "@/components/Select";
 import {
-  countsInPersonalReports,
-  expenseByAccount,
   fmt,
   MONTHS,
   MONTHS_FULL,
   savingRate,
-  statisticsAvailableYears,
-  statisticsMonths,
   statisticsScopeLabel,
-  totalFundsForMonth,
-  totalIncomeForMonth,
-  transactionMonthKey,
   type StatisticsScope,
 } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
@@ -33,47 +27,28 @@ interface StatisticsRow {
 type ScopeMode = StatisticsScope["mode"];
 
 export function StatisticsPage() {
-  const ledger = useFinanceStore((state) => state.ledger);
+  const statistics = useFinanceStore((state) => state.statistics);
+  const loadStatistics = useFinanceStore((state) => state.loadStatistics);
   const scope = useFinanceStore((state) => state.statisticsScope);
   const setScope = useFinanceStore((state) => state.setStatisticsScope);
   const selectedYear = useFinanceStore((state) => state.selectedYear);
   const selectedMonth = useFinanceStore((state) => state.selectedMonth);
-  const availableYears = statisticsAvailableYears(ledger).slice().sort((a, b) => b - a);
+  useEffect(() => {
+    void loadStatistics(scope);
+  }, [loadStatistics, scope]);
+
+  const availableYears = (statistics?.availableYears ?? [selectedYear]).slice().sort((a, b) => b - a);
   const monthOptions = availableYears.flatMap((year) => Array.from({ length: 12 }, (_, month) => {
     const key = `${year}-${String(month + 1).padStart(2, "0")}`;
     return { value: key, label: `${MONTHS_FULL[month]} / ${year}` };
   }));
   const currentMonth = `${selectedYear}-${String(selectedMonth + 1).padStart(2, "0")}`;
-  const scopedMonths = statisticsMonths(ledger, scope);
+  const rows: StatisticsRow[] = statistics?.rows ?? [];
   const scopeLabel = statisticsScopeLabel(scope);
-  const rows: StatisticsRow[] = scopedMonths.map(({ year, month, key }) => {
-    const income = totalIncomeForMonth(ledger, year, month);
-    const spent = ledger.expense.txns
-      .filter((transaction) => transaction.type === "expense" && transactionMonthKey(transaction) === key)
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
-    const funds = totalFundsForMonth(ledger, year, month, countsInPersonalReports);
-    return {
-      year,
-      month,
-      key,
-      income,
-      spent,
-      funds,
-      balance: income - spent - funds,
-      byFund: Object.fromEntries(ledger.funds.filter(countsInPersonalReports).map((fund) => [fund.id, ledger.years[String(year)]?.funds[fund.id]?.[month] ?? 0])),
-    };
-  });
-  const totals = rows.reduce((result, row) => ({
-    income: result.income + row.income,
-    spent: result.spent + row.spent,
-    funds: result.funds + row.funds,
-    balance: result.balance + row.balance,
-  }), { income: 0, spent: 0, funds: 0, balance: 0 });
-  const selectedMonthKeys = new Set(rows.map((row) => row.key));
-  const scopedTransactions = ledger.expense.txns.filter((transaction) => selectedMonthKeys.has(transactionMonthKey(transaction)));
-  const expenseBreakdown = categoryBreakdown(ledger.expense.cats, "expense", scopedTransactions);
-  const incomeBreakdown = categoryBreakdown(ledger.expense.incomeCats, "income", scopedTransactions);
-  const accountExpenses = expenseByAccount(ledger, scopedTransactions);
+  const totals = statistics?.totals ?? { income: 0, spent: 0, funds: 0, balance: 0 };
+  const expenseBreakdown = statistics?.expenseBreakdown ?? [];
+  const incomeBreakdown = statistics?.incomeBreakdown ?? [];
+  const accountExpenses = statistics?.accountExpenses ?? [];
   const showYearInLabels = scope.mode === "all" || scope.mode === "range" || scope.mode === "month";
   const labels = rows.map((row) => showYearInLabels ? `${MONTHS[row.month]}/${row.year}` : MONTHS[row.month]!);
   const trackedRows = rows.filter((row) => row.income || row.spent || row.funds);
@@ -112,7 +87,7 @@ export function StatisticsPage() {
             <Select<string> value={scope.to} options={monthOptions} onValueChange={(to) => setScope({ mode: "range", from: to < scope.from ? to : scope.from, to })} ariaLabel="Đến tháng" />
           </label>
         </> : null}
-        <p className="hint">{scope.mode === "all" ? "Hiển thị riêng từng tháng-năm theo trình tự thời gian." : `Đang xem ${scopedMonths.length} tháng dữ liệu.`}</p>
+        <p className="hint">{scope.mode === "all" ? "Hiển thị riêng từng tháng-năm theo trình tự thời gian." : `Đang xem ${rows.length} tháng dữ liệu.`}</p>
       </div>
 
       <div className="stat-row stat-row-5">
@@ -139,7 +114,7 @@ export function StatisticsPage() {
           <FinanceBarChart
             labels={labels}
             stacked
-            datasets={ledger.funds.filter(countsInPersonalReports).map((fund) => ({
+            datasets={(statistics?.funds ?? []).map((fund) => ({
               label: fund.name,
               values: rows.map((row) => row.byFund[fund.id] ?? 0),
               color: fund.color,
@@ -154,10 +129,10 @@ export function StatisticsPage() {
         <p className="hint">Tổng tiền từng quỹ trong phần dữ liệu đang xem.</p>
         <div className="chart-wrap">
           <FinanceBarChart
-            labels={ledger.funds.filter(countsInPersonalReports).map((fund) => fund.name)}
+            labels={(statistics?.funds ?? []).map((fund) => fund.name)}
             datasets={comparisonYears.map((year, index, list) => ({
               label: String(year),
-              values: ledger.funds.filter(countsInPersonalReports).map((fund) => rows.filter((row) => row.year === year).reduce((sum, row) => sum + (row.byFund[fund.id] ?? 0), 0)),
+              values: (statistics?.funds ?? []).map((fund) => rows.filter((row) => row.year === year).reduce((sum, row) => sum + (row.byFund[fund.id] ?? 0), 0)),
               color: `rgba(59,110,165,${0.35 + (index / Math.max(1, list.length - 1)) * 0.65})`,
             }))}
           />
@@ -200,13 +175,6 @@ export function StatisticsPage() {
       </article>
     </section>
   );
-}
-
-function categoryBreakdown(categories: FinanceCategory[], type: TransactionType, transactions: Array<{ type: TransactionType; cat: string; amount: number }>) {
-  return categories.map((category) => ({
-    ...category,
-    amount: transactions.filter((transaction) => transaction.type === type && transaction.cat === category.id).reduce((sum, transaction) => sum + transaction.amount, 0),
-  })).filter((item) => item.amount > 0).sort((a, b) => b.amount - a.amount);
 }
 
 function Stat({ label, value, meta, accent }: { label: string; value: string; meta: string; accent: "gold" | "green" | "rust" | "blue" }) {

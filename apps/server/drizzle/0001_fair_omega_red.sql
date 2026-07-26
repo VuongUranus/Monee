@@ -1,0 +1,1 @@
+ALTER TABLE "funds" ADD COLUMN "goal_configured" boolean DEFAULT false NOT NULL;

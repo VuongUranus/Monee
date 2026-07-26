@@ -123,7 +123,15 @@ describe("nghiệp vụ sổ tài chính", () => {
     });
     expect(normalized.needsSave).toBe(true);
     expect(normalized.store.years["2026"]!.details.stock![0]).toEqual({
-      type: "hold", lots: [{ ticker: "VNM", qty: 2, manualPrice: 50_000 }],
+      type: "hold",
+      lots: [{
+        ticker: "VNM",
+        qty: 2,
+        manualPrice: 50_000,
+        purchasePrice: null,
+        purchaseFxVnd: null,
+        feeVnd: null,
+      }],
     });
     expect(normalized.store.years["2026"]!.details.gold![0]).toEqual({
       type: "gold", lots: [{ chi: 1.5, manualPrice: 7_000_000 }],

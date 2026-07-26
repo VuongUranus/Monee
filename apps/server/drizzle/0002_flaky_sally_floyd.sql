@@ -1,0 +1,1 @@
+ALTER TABLE "ledger_months" ADD COLUMN "income" bigint DEFAULT 0 NOT NULL;

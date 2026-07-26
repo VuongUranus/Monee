@@ -1,98 +1,801 @@
 import type { FastifyPluginAsync } from "fastify";
-import type { SharedFundContent, SharedFundRole, StoredFinancePayload } from "@chi-tieu/shared";
-import { SharedFundError } from "../lib/repository.js";
+import type {
+  FundDetail,
+  TransactionType,
+} from "@chi-tieu/shared";
+import { z } from "zod";
+import { SharedFundError, type PersonalMutationCommand } from "../lib/repository.js";
 
-function isObject(value: unknown): value is StoredFinancePayload {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function role(value: unknown): SharedFundRole | null {
-  return value === "viewer" || value === "editor" ? value : null;
-}
+const revision = z.number().int().positive();
+const money = z.number().finite().nonnegative();
+const positiveMoney = z.number().finite().positive();
+const yearSchema = z.coerce.number().int().min(1900).max(9999);
+const monthSchema = z.coerce.number().int().min(1).max(12);
+const roleSchema = z.enum(["viewer", "editor"]);
+const fundCategorySchema = z.enum(["saving", "stock", "gold", "crypto"]);
+const transactionTypeSchema = z.enum(["income", "expense"]);
+const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 function sendError(reply: any, error: unknown): any {
   if (error instanceof SharedFundError) return reply.code(error.statusCode).send({ error: error.code, message: error.message });
   throw error;
 }
 
+function body<T>(schema: z.ZodType<T>, value: unknown): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw new SharedFundError("invalid_request", 400, "Dữ liệu gửi lên không hợp lệ.");
+  return parsed.data;
+}
+
+function sessionUser(app: any, request: any, reply: any): string | null {
+  const session = app.finance.sessions.getSession(request);
+  if (!session) {
+    void reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
+    return null;
+  }
+  return session.userId;
+}
+
+function sendReadError(reply: any, error: unknown): any {
+  if (error instanceof SharedFundError) return sendError(reply, error);
+  if (error instanceof Error && error.message === "fund_not_found") {
+    return reply.code(404).send({ error: "fund_not_found", message: "Không tìm thấy quỹ." });
+  }
+  if (error instanceof Error && error.message === "forbidden") {
+    return reply.code(403).send({ error: "forbidden", message: "Bạn không có quyền thực hiện thao tác này." });
+  }
+  throw error;
+}
+
+async function personal(
+  app: any,
+  userId: string,
+  expectedRevision: number,
+  command: PersonalMutationCommand,
+): Promise<unknown> {
+  return app.finance.repository.mutatePersonalResource(userId, expectedRevision, command);
+}
+
 export const dataRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/data", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) {
-      return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
-    }
-    return app.finance.repository.getWorkspace(session.userId);
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    return app.finance.repository.getBootstrap(userId);
   });
 
-  app.put<{ Body: unknown }>("/api/data", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) {
-      return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
-    }
-    if (!isObject(request.body)) return reply.code(400).type("text/plain").send("Invalid JSON");
-    await app.finance.repository.saveUserData(session.userId, request.body);
-    return reply.code(204).send();
+  app.get("/api/backup/export", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    return app.finance.repository.getUserData(userId);
   });
 
-  app.post<{ Body: { fundId?: unknown; email?: unknown; role?: unknown } }>("/api/shared-funds", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
-    const memberRole = role(request.body?.role);
-    if (typeof request.body?.fundId !== "string" || typeof request.body?.email !== "string" || !memberRole) {
-      return reply.code(400).send({ error: "invalid_request", message: "Thông tin chia sẻ không hợp lệ." });
-    }
+  app.get("/api/expenses/config", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    return app.finance.repository.getExpenseConfig(userId);
+  });
+
+  app.get<{ Querystring: unknown }>("/api/expenses/summary", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ year: yearSchema, month: monthSchema }), request.query);
+    return app.finance.repository.getExpenseSummary(userId, parsed.year, parsed.month);
+  });
+
+  app.get<{ Querystring: unknown }>("/api/transactions", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      from: dateSchema,
+      to: dateSchema,
+      type: transactionTypeSchema.optional(),
+      categoryId: z.string().min(1).optional(),
+      accountId: z.string().min(1).optional(),
+      q: z.string().max(500).optional(),
+      page: z.coerce.number().int().positive().default(1),
+      pageSize: z.coerce.number().int().min(1).max(100).default(10),
+    }), request.query);
+    return app.finance.repository.getTransactions(userId, {
+      from: parsed.from,
+      to: parsed.to,
+      page: parsed.page,
+      pageSize: parsed.pageSize,
+      ...(parsed.type ? { type: parsed.type } : {}),
+      ...(parsed.categoryId ? { categoryId: parsed.categoryId } : {}),
+      ...(parsed.accountId ? { accountId: parsed.accountId } : {}),
+      ...(parsed.q ? { q: parsed.q } : {}),
+    });
+  });
+
+  app.get<{ Querystring: unknown }>("/api/funds/overview", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ year: yearSchema, month: monthSchema }), request.query);
+    return app.finance.repository.getFundOverview(userId, parsed.year, parsed.month);
+  });
+
+  app.get<{ Params: { id: string; year: string; month: string } }>(
+    "/api/funds/:id/months/:year/:month",
+    async (request, reply) => {
+      const userId = sessionUser(app, request, reply);
+      if (!userId) return reply;
+      const targetYear = body(yearSchema, request.params.year);
+      const targetMonth = body(monthSchema, request.params.month);
+      try {
+        return await app.finance.repository.getFundMonthDetail(
+          userId,
+          request.params.id,
+          targetYear,
+          targetMonth,
+        );
+      } catch (error) {
+        return sendReadError(reply, error);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>("/api/shared-funds/:id/members", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
     try {
-      return await app.finance.repository.createSharedFund(session.userId, request.body.fundId, request.body.email, memberRole);
+      return await app.finance.repository.getSharedFundMembers(userId, request.params.id);
+    } catch (error) {
+      return sendReadError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: unknown }>(
+    "/api/shared-funds/:id/contributions",
+    async (request, reply) => {
+      const userId = sessionUser(app, request, reply);
+      if (!userId) return reply;
+      const parsed = body(z.object({ year: yearSchema, month: monthSchema }), request.query);
+      try {
+        return await app.finance.repository.getSharedFundContributions(
+          userId,
+          request.params.id,
+          parsed.year,
+          parsed.month,
+        );
+      } catch (error) {
+        return sendReadError(reply, error);
+      }
+    },
+  );
+
+  app.get<{ Querystring: unknown }>("/api/statistics", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("all") }),
+      z.object({ mode: z.literal("year"), year: yearSchema }),
+      z.object({ mode: z.literal("month"), month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }),
+      z.object({
+        mode: z.literal("range"),
+        from: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+        to: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+      }),
+    ]), request.query);
+    if (parsed.mode === "range" && parsed.from > parsed.to) {
+      return reply.code(400).send({ error: "invalid_range", message: "Khoảng thời gian không hợp lệ." });
+    }
+    return app.finance.repository.getStatistics(userId, parsed);
+  });
+
+  app.put<{ Body: unknown }>("/api/data/import", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision, data: z.record(z.string(), z.unknown()) }), request.body);
+    await app.finance.repository.replaceUserData(userId, parsed.expectedRevision, parsed.data);
+    return app.finance.repository.getBootstrap(userId);
+  });
+
+  app.patch<{ Body: unknown }>("/api/preferences", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      showGoals: z.boolean().optional(),
+      financialProfile: z.object({
+        monthlyIncome: money.optional(),
+        emergencyFundGoal: money.optional(),
+        debtBalance: money.optional(),
+        debtMonthlyPayment: money.optional(),
+      }).optional(),
+      onboarding: z.object({
+        status: z.enum(["pending", "completed", "skipped"]),
+        version: z.number().int().positive(),
+        skippedAt: z.string().datetime().optional(),
+      }).optional(),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "preferences",
+        patch: {
+          ...(parsed.showGoals !== undefined ? { showGoals: parsed.showGoals } : {}),
+          ...(parsed.financialProfile ? {
+            financialProfile: {
+              ...(parsed.financialProfile.monthlyIncome !== undefined
+                ? { monthlyIncome: parsed.financialProfile.monthlyIncome }
+                : {}),
+              ...(parsed.financialProfile.emergencyFundGoal !== undefined
+                ? { emergencyFundGoal: parsed.financialProfile.emergencyFundGoal }
+                : {}),
+              ...(parsed.financialProfile.debtBalance !== undefined
+                ? { debtBalance: parsed.financialProfile.debtBalance }
+                : {}),
+              ...(parsed.financialProfile.debtMonthlyPayment !== undefined
+                ? { debtMonthlyPayment: parsed.financialProfile.debtMonthlyPayment }
+                : {}),
+            },
+          } : {}),
+          ...(parsed.onboarding ? {
+            onboarding: {
+              status: parsed.onboarding.status,
+              version: parsed.onboarding.version,
+              ...(parsed.onboarding.skippedAt ? { skippedAt: parsed.onboarding.skippedAt } : {}),
+            },
+          } : {}),
+        },
+      });
     } catch (error) { return sendError(reply, error); }
   });
 
-  app.put<{ Params: { id: string }; Body: { revision?: unknown; content?: unknown } }>("/api/shared-funds/:id", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
-    if (!Number.isInteger(request.body?.revision) || !isObject(request.body?.content)) {
-      return reply.code(400).send({ error: "invalid_request", message: "Dữ liệu quỹ không hợp lệ." });
-    }
+  app.put<{ Params: { year: string }; Body: unknown }>("/api/years/:year", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const targetYear = body(yearSchema, request.params.year);
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
     try {
-      return await app.finance.repository.saveSharedFund(session.userId, request.params.id, request.body.revision as number, request.body.content as unknown as SharedFundContent);
+      return await personal(app, userId, parsed.expectedRevision, { kind: "ensureYear", year: targetYear });
     } catch (error) { return sendError(reply, error); }
   });
 
-  app.put<{ Params: { id: string }; Body: { email?: unknown; role?: unknown } }>("/api/shared-funds/:id/members", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
-    const memberRole = role(request.body?.role);
-    if (typeof request.body?.email !== "string" || !memberRole) return reply.code(400).send({ error: "invalid_request", message: "Thông tin thành viên không hợp lệ." });
+  app.patch<{ Params: { year: string; month: string }; Body: unknown }>("/api/years/:year/months/:month", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const targetYear = body(yearSchema, request.params.year);
+    const targetMonth = body(monthSchema, request.params.month);
+    const parsed = body(z.object({ expectedRevision: revision, note: z.string().max(10_000) }), request.body);
     try {
-      return await app.finance.repository.setSharedFundMember(session.userId, request.params.id, request.body.email, memberRole);
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "monthNote",
+        year: targetYear,
+        month: targetMonth,
+        note: parsed.note,
+      });
     } catch (error) { return sendError(reply, error); }
   });
 
-  app.delete<{ Params: { id: string; memberId: string } }>("/api/shared-funds/:id/members/:memberId", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
+  app.post<{ Params: { year: string; month: string }; Body: unknown }>("/api/years/:year/months/:month/reset", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const targetYear = body(yearSchema, request.params.year);
+    const targetMonth = body(monthSchema, request.params.month);
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
     try {
-      await app.finance.repository.removeSharedFundMember(session.userId, request.params.id, request.params.memberId);
-      return reply.code(204).send();
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "resetMonth",
+        year: targetYear,
+        month: targetMonth,
+      });
     } catch (error) { return sendError(reply, error); }
   });
 
-  app.delete<{ Params: { id: string } }>("/api/shared-funds/:id", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
+  app.post<{ Body: unknown }>("/api/funds", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      name: z.string().trim().min(1).max(200),
+      color: z.string().min(1).max(32),
+      category: fundCategorySchema,
+    }), request.body);
     try {
-      await app.finance.repository.deleteSharedFund(session.userId, request.params.id);
-      return reply.code(204).send();
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "createFund",
+        input: { name: parsed.name, color: parsed.color, category: parsed.category },
+      });
     } catch (error) { return sendError(reply, error); }
   });
 
-  app.post<{ Params: { id: string }; Body: { month?: unknown; amount?: unknown; note?: unknown } }>("/api/shared-funds/:id/contributions", async (request, reply) => {
-    const session = app.finance.sessions.getSession(request);
-    if (!session) return reply.code(401).send({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
-    if (typeof request.body?.month !== "string" || typeof request.body?.amount !== "number" || (request.body.note !== undefined && typeof request.body.note !== "string")) {
-      return reply.code(400).send({ error: "invalid_request", message: "Khoản đóng góp không hợp lệ." });
-    }
+  app.patch<{ Params: { id: string }; Body: unknown }>("/api/funds/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      name: z.string().trim().min(1).max(200).optional(),
+      color: z.string().min(1).max(32).optional(),
+      category: fundCategorySchema.optional(),
+      fundPlan: money.optional(),
+      openingBalance: money.optional(),
+    }), request.body);
     try {
-      return await app.finance.repository.addSharedFundContribution(session.userId, request.params.id, request.body.month, request.body.amount, request.body.note ?? "");
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "updateFund",
+        id: request.params.id,
+        patch: {
+          ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+          ...(parsed.color !== undefined ? { color: parsed.color } : {}),
+          ...(parsed.category !== undefined ? { category: parsed.category } : {}),
+          ...(parsed.fundPlan !== undefined ? { fundPlan: parsed.fundPlan } : {}),
+          ...(parsed.openingBalance !== undefined ? { openingBalance: parsed.openingBalance } : {}),
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string }; Body: unknown }>("/api/funds/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "deleteFund",
+        id: request.params.id,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Body: unknown }>("/api/funds/order", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision, ids: z.array(z.string()).min(1) }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "reorderFunds",
+        ids: parsed.ids,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Params: { id: string; year: string; month: string }; Body: unknown }>("/api/funds/:id/months/:year/:month", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const targetYear = body(yearSchema, request.params.year);
+    const targetMonth = body(monthSchema, request.params.month);
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      amount: money,
+      detail: z.custom<FundDetail>((value) => value === null || (typeof value === "object" && value !== null && "type" in value)).optional(),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "fundMonth",
+        id: request.params.id,
+        year: targetYear,
+        month: targetMonth,
+        patch: {
+          amount: Math.round(parsed.amount),
+          ...(parsed.detail !== undefined ? { detail: parsed.detail } : {}),
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/funds/:id/goals", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision, year: z.number().int().positive().nullable(), amount: money }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "fundGoal",
+        id: request.params.id,
+        input: { year: parsed.year, amount: parsed.amount },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/transactions", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      transaction: z.object({
+        id: z.string().optional(),
+        date: z.string().date(),
+        type: transactionTypeSchema,
+        cat: z.string().min(1),
+        accountId: z.string().optional(),
+        amount: positiveMoney,
+        note: z.string().max(10_000),
+      }),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "createTransaction",
+        transaction: {
+          ...(parsed.transaction.id ? { id: parsed.transaction.id } : {}),
+          date: parsed.transaction.date,
+          type: parsed.transaction.type,
+          cat: parsed.transaction.cat,
+          ...(parsed.transaction.accountId ? { accountId: parsed.transaction.accountId } : {}),
+          amount: parsed.transaction.amount,
+          note: parsed.transaction.note,
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/transactions/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      transaction: z.object({
+        date: z.string().date(),
+        type: transactionTypeSchema,
+        cat: z.string().min(1),
+        accountId: z.string().optional(),
+        amount: positiveMoney,
+        note: z.string().max(10_000),
+      }),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "updateTransaction",
+        id: request.params.id,
+        transaction: {
+          date: parsed.transaction.date,
+          type: parsed.transaction.type,
+          cat: parsed.transaction.cat,
+          ...(parsed.transaction.accountId ? { accountId: parsed.transaction.accountId } : {}),
+          amount: parsed.transaction.amount,
+          note: parsed.transaction.note,
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string }; Body: unknown }>("/api/transactions/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "deleteTransaction",
+        id: request.params.id,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/categories", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      type: transactionTypeSchema,
+      name: z.string().trim().min(1).max(200),
+      color: z.string().min(1).max(32),
+      budget: money.optional(),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "createCategory",
+        input: {
+          type: parsed.type,
+          name: parsed.name,
+          color: parsed.color,
+          ...(parsed.type === "expense" ? { budget: parsed.budget ?? 0 } : {}),
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.patch<{ Params: { type: TransactionType; id: string }; Body: unknown }>("/api/categories/:type/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const type = body(transactionTypeSchema, request.params.type);
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      name: z.string().trim().min(1).max(200).optional(),
+      color: z.string().min(1).max(32).optional(),
+      budget: money.optional(),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "updateCategory",
+        type,
+        id: request.params.id,
+        patch: {
+          ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+          ...(parsed.color !== undefined ? { color: parsed.color } : {}),
+          ...(parsed.budget !== undefined && type === "expense" ? { budget: parsed.budget } : {}),
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { type: TransactionType; id: string }; Body: unknown }>("/api/categories/:type/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const type = body(transactionTypeSchema, request.params.type);
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "deleteCategory",
+        type,
+        id: request.params.id,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Params: { type: TransactionType }; Body: unknown }>("/api/categories/:type/order", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const type = body(transactionTypeSchema, request.params.type);
+    const parsed = body(z.object({ expectedRevision: revision, ids: z.array(z.string()).min(1) }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "reorderCategories",
+        type,
+        ids: parsed.ids,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/account-types", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision, name: z.string().trim().min(1).max(200) }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "createAccountType",
+        name: parsed.name,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.patch<{ Params: { id: string }; Body: unknown }>("/api/account-types/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision, name: z.string().trim().min(1).max(200) }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "updateAccountType",
+        id: request.params.id,
+        name: parsed.name,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string }; Body: unknown }>("/api/account-types/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "deleteAccountType",
+        id: request.params.id,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Body: unknown }>("/api/account-types/order", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision, ids: z.array(z.string()) }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "reorderAccountTypes",
+        ids: parsed.ids,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/accounts", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      name: z.string().trim().min(1).max(200),
+      typeId: z.string().optional(),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "createAccount",
+        input: {
+          name: parsed.name,
+          ...(parsed.typeId ? { typeId: parsed.typeId } : {}),
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.patch<{ Params: { id: string }; Body: unknown }>("/api/accounts/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      name: z.string().trim().min(1).max(200).optional(),
+      typeId: z.string().nullable().optional(),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "updateAccount",
+        id: request.params.id,
+        patch: {
+          ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+          ...(parsed.typeId !== undefined ? { typeId: parsed.typeId } : {}),
+        },
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string }; Body: unknown }>("/api/accounts/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "deleteAccount",
+        id: request.params.id,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Body: unknown }>("/api/accounts/order", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision, ids: z.array(z.string()) }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "reorderAccounts",
+        ids: parsed.ids,
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/shared-funds", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      fundId: z.string(),
+      email: z.string().email(),
+      role: roleSchema,
+    }), request.body);
+    try {
+      const data = await app.finance.repository.createSharedFund(
+        userId,
+        parsed.fundId,
+        parsed.email,
+        parsed.role,
+        parsed.expectedRevision,
+      );
+      return { data, workspaceRevision: (await app.finance.repository.getBootstrap(userId)).workspaceRevision };
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.patch<{ Params: { id: string }; Body: unknown }>("/api/shared-funds/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      revision,
+      name: z.string().trim().min(1).max(200).optional(),
+      color: z.string().min(1).max(32).optional(),
+      category: fundCategorySchema.optional(),
+      fundPlan: money.optional(),
+      openingBalance: money.optional(),
+    }), request.body);
+    try {
+      return await app.finance.repository.mutateSharedResource(
+        userId,
+        request.params.id,
+        parsed.revision,
+        {
+          kind: "metadata",
+          patch: {
+            ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+            ...(parsed.color !== undefined ? { color: parsed.color } : {}),
+            ...(parsed.category !== undefined ? { category: parsed.category } : {}),
+            ...(parsed.fundPlan !== undefined ? { fundPlan: parsed.fundPlan } : {}),
+            ...(parsed.openingBalance !== undefined ? { openingBalance: parsed.openingBalance } : {}),
+          },
+        },
+      );
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Params: { id: string; year: string; month: string }; Body: unknown }>("/api/shared-funds/:id/months/:year/:month", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const targetYear = body(yearSchema, request.params.year);
+    const targetMonth = body(monthSchema, request.params.month);
+    const parsed = body(z.object({
+      revision,
+      amount: money,
+      detail: z.custom<FundDetail>((value) => value === null || (typeof value === "object" && value !== null && "type" in value)).optional(),
+    }), request.body);
+    try {
+      return await app.finance.repository.mutateSharedResource(
+        userId,
+        request.params.id,
+        parsed.revision,
+        {
+          kind: "month",
+          year: targetYear,
+          month: targetMonth,
+          amount: parsed.amount,
+          ...(parsed.detail !== undefined ? { detail: parsed.detail } : {}),
+        },
+      );
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/shared-funds/:id/goals", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ revision, year: z.number().int().positive().nullable(), amount: money }), request.body);
+    try {
+      return await app.finance.repository.mutateSharedResource(
+        userId,
+        request.params.id,
+        parsed.revision,
+        { kind: "goal", year: parsed.year, amount: parsed.amount },
+      );
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/shared-funds/:id/members", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ revision, email: z.string().email(), role: roleSchema }), request.body);
+    try {
+      return await app.finance.repository.mutateSharedResource(
+        userId,
+        request.params.id,
+        parsed.revision,
+        { kind: "setMember", email: parsed.email, role: parsed.role },
+      );
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string; memberId: string }; Body: unknown }>("/api/shared-funds/:id/members/:memberId", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ revision }), request.body);
+    try {
+      return await app.finance.repository.mutateSharedResource(
+        userId,
+        request.params.id,
+        parsed.revision,
+        { kind: "removeMember", memberId: request.params.memberId },
+      );
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string }; Body: unknown }>("/api/shared-funds/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ revision }), request.body);
+    try {
+      return await app.finance.repository.mutateSharedResource(
+        userId,
+        request.params.id,
+        parsed.revision,
+        { kind: "delete" },
+      );
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/shared-funds/:id/contributions", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      revision,
+      month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+      amount: positiveMoney,
+      note: z.string().max(10_000).default(""),
+    }), request.body);
+    try {
+      const [year, month] = parsed.month.split("-").map(Number) as [number, number];
+      return await app.finance.repository.mutateSharedResource(
+        userId,
+        request.params.id,
+        parsed.revision,
+        { kind: "contribution", year, month, amount: parsed.amount, note: parsed.note },
+      );
     } catch (error) { return sendError(reply, error); }
   });
 };

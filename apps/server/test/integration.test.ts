@@ -3,55 +3,49 @@ import os from "node:os";
 import path from "node:path";
 import type {
   MarketQuotesResponse,
+  StoredFinancePayload,
   UserDatabase,
   UserProfile,
 } from "@chi-tieu/shared";
+import { createDefaultStore } from "@chi-tieu/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
-import { JsonUserRepository } from "../src/lib/repository.js";
+import { importUserDatabase, verifyUserDatabase } from "../src/db/data-migration.js";
+import * as schema from "../src/db/schema.js";
 import type { MarketService } from "../src/services/market.js";
+import {
+  createPostgresTestContext,
+  seedUser,
+  type PostgresTestContext,
+} from "./postgres.js";
 
-const temporaryDirectories: string[] = [];
 const profile: UserProfile = {
   sub: "integration-user",
   email: "integration@example.com",
   name: "Integration User",
   picture: "",
 };
+let postgres: PostgresTestContext;
 
-afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
-});
+beforeAll(async () => {
+  postgres = await createPostgresTestContext();
+}, 120_000);
 
-async function createDatabase(initialData: Record<string, unknown> = {}): Promise<{ directory: string; databasePath: string }> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "finance-integration-"));
-  temporaryDirectories.push(directory);
-  const databasePath = path.join(directory, "data.json");
-  const timestamp = new Date(0).toISOString();
-  const database: UserDatabase = {
-    schemaVersion: 3,
-    users: {
-      [profile.sub]: {
-        profile,
-        data: initialData,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-    },
-  };
-  await fs.writeFile(databasePath, JSON.stringify(database), "utf8");
-  return { directory, databasePath };
-}
+afterAll(async () => {
+  await postgres?.close();
+}, 120_000);
 
 async function createAuthenticatedApp(options: {
-  initialData?: Record<string, unknown>;
+  initialData?: StoredFinancePayload;
   marketService?: MarketService;
-} = {}): Promise<{ app: FastifyInstance; cookie: string; databasePath: string; directory: string }> {
-  const { directory, databasePath } = await createDatabase(options.initialData);
+} = {}): Promise<{ app: FastifyInstance; cookie: string }> {
+  await postgres.reset();
+  const initial = options.initialData ?? createDefaultStore() as unknown as StoredFinancePayload;
+  await seedUser(postgres, profile, initial);
   const app = await buildApp({
-    workspaceRoot: directory,
-    databasePath,
+    repository: postgres.repository,
     serveWeb: false,
     env: {
       SESSION_SECRET: "integration-session-secret-at-least-twenty-bytes",
@@ -61,126 +55,606 @@ async function createAuthenticatedApp(options: {
   });
   const sessionId = app.finance.sessions.createSession(profile);
   const cookie = `finance_session=${app.finance.sessions.signedSessionValue(sessionId)}`;
-  return { app, cookie, databasePath, directory };
+  return { app, cookie };
 }
 
-describe("repository JSON", () => {
-  it("tuần tự hóa ghi đồng thời, luôn để lại JSON hoàn chỉnh và không sót file tạm", async () => {
-    const { databasePath, directory } = await createDatabase({ revision: -1 });
-    let suffix = 0;
-    const repository = new JsonUserRepository({
-      databasePath,
-      now: () => suffix,
-      randomBytes: () => Buffer.from(String(suffix++).padStart(12, "0")),
+describe("PostgreSQL repository", () => {
+  it("khóa workspace revision để chỉ một mutation đồng thời được ghi", async () => {
+    await postgres.reset();
+    await postgres.repository.provisionUser(profile);
+    const first = createDefaultStore();
+    first.showGoals = true;
+    const second = createDefaultStore();
+    second.showGoals = false;
+
+    const writes = await Promise.allSettled([
+      postgres.repository.replaceUserData(profile.sub, 1, first as unknown as StoredFinancePayload),
+      postgres.repository.replaceUserData(profile.sub, 1, second as unknown as StoredFinancePayload),
+    ]);
+
+    expect(writes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(writes.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(await postgres.repository.getBootstrap(profile.sub)).toMatchObject({ workspaceRevision: 2 });
+  });
+
+  it("import JSON idempotent, đối soát semantic và từ chối checksum khác", async () => {
+    await postgres.reset();
+    const timestamp = new Date(0).toISOString();
+    const database: UserDatabase = {
+      schemaVersion: 4,
+      users: {
+        [profile.sub]: {
+          profile,
+          data: createDefaultStore() as unknown as StoredFinancePayload,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      },
+      sharedFunds: {},
+    };
+    const source = JSON.stringify(database);
+    const first = await importUserDatabase(postgres.client.db, source, "fixture.json");
+    expect(first).toMatchObject({ alreadyImported: false, users: 1, funds: 4, transactions: 0 });
+    expect(await verifyUserDatabase(postgres.client.db, source)).toEqual({ ok: true, differences: [] });
+    expect(await importUserDatabase(postgres.client.db, source, "fixture.json")).toMatchObject({
+      alreadyImported: true,
+      checksum: first.checksum,
     });
-
-    await Promise.all(Array.from({ length: 20 }, (_, revision) =>
-      repository.saveUserData(profile.sub, { revision, payload: "x".repeat(revision * 100) })));
-
-    expect(await repository.getUserData(profile.sub)).toMatchObject({ revision: 19 });
-    const stored = JSON.parse(await fs.readFile(databasePath, "utf8")) as UserDatabase;
-    expect(stored.users[profile.sub]?.data).toMatchObject({ revision: 19 });
-    expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    await expect(importUserDatabase(
+      postgres.client.db,
+      JSON.stringify({ ...database, schemaVersion: 3 }),
+      "different.json",
+    )).rejects.toThrow("từ chối ghi đè");
   });
 });
 
-describe("Fastify data và market routes", () => {
+describe("Fastify CRUD, sharing và market routes", () => {
   it("chia sẻ quỹ theo email, áp quyền và phát hiện xung đột revision", async () => {
     const initialData = {
+      ...createDefaultStore(),
       funds: [{ id: "joint", name: "Quỹ chung", color: "#123456", cat: "saving" }],
-      years: { "2026": { income: new Array(12).fill(0), funds: { joint: new Array(12).fill(100) }, details: { joint: new Array(12).fill(null) }, notes: new Array(12).fill("") } },
+      years: {
+        "2026": {
+          income: new Array(12).fill(0),
+          funds: { joint: new Array(12).fill(100) },
+          details: { joint: new Array(12).fill(null) },
+          notes: new Array(12).fill(""),
+        },
+      },
       goals: { joint: { years: { "2026": 1000 }, all: 2000 } },
-      financialProfile: { fundPlan: { joint: 50 }, openingBalances: { joint: 20 } },
-    };
-    const { app, cookie, databasePath } = await createAuthenticatedApp({ initialData });
+      financialProfile: {
+        ...createDefaultStore().financialProfile,
+        fundPlan: { joint: 50 },
+        openingBalances: { joint: 20 },
+      },
+    } as StoredFinancePayload;
+    const { app, cookie } = await createAuthenticatedApp({ initialData });
     const bob: UserProfile = { sub: "integration-bob", email: "bob@example.com", name: "Bob", picture: "" };
-    const database = JSON.parse(await fs.readFile(databasePath, "utf8")) as UserDatabase;
-    database.users[bob.sub] = { profile: bob, data: { onboarding: { status: "pending", version: 1 } }, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() };
-    await fs.writeFile(databasePath, JSON.stringify(database), "utf8");
+    await postgres.repository.provisionUser(bob);
     const bobSession = app.finance.sessions.createSession(bob);
     const bobCookie = `finance_session=${app.finance.sessions.signedSessionValue(bobSession)}`;
     try {
-      const created = await app.inject({ method: "POST", url: "/api/shared-funds", headers: { cookie }, payload: { fundId: "joint", email: bob.email, role: "viewer" } });
+      const ownerWorkspace = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/shared-funds",
+        headers: { cookie },
+        payload: { fundId: "joint", email: bob.email, role: "viewer", expectedRevision: ownerWorkspace.workspaceRevision },
+      });
       expect(created.statusCode).toBe(200);
-      const shared = created.json();
-      expect(shared.content.fund.id).toBe(shared.id);
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json().data.funds).toEqual([]);
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json().sharedFunds).toHaveLength(1);
-      expect((await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}`, headers: { cookie: bobCookie }, payload: { revision: 1, content: shared.content } })).statusCode).toBe(403);
+      const shared = created.json().data;
+      expect(shared).toEqual({ id: expect.stringMatching(/^shared-/), revision: 1 });
+      const ownerAfterShare = created.json();
+      const ownerBackup = (await app.inject({
+        method: "GET",
+        url: "/api/backup/export",
+        headers: { cookie },
+      })).json();
+      expect(ownerBackup.funds).toEqual([]);
+      const personalAfterShare = await app.inject({
+        method: "POST",
+        url: "/api/transactions",
+        headers: { cookie },
+        payload: {
+          expectedRevision: ownerAfterShare.workspaceRevision,
+          transaction: {
+            id: "after-share",
+            date: "2026-07-27",
+            type: "expense",
+            cat: "food",
+            amount: 10_000,
+            note: "Cá nhân sau chia sẻ",
+          },
+        },
+      });
+      expect(personalAfterShare.statusCode).toBe(200);
+      expect(personalAfterShare.json().data).toEqual(expect.objectContaining({ id: "after-share" }));
+      const bobOverview = (await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie: bobCookie },
+      })).json();
+      expect(bobOverview.funds).toContainEqual(
+        expect.objectContaining({ id: shared.id, role: "viewer" }),
+      );
 
-      const upgraded = await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}/members`, headers: { cookie }, payload: { email: bob.email, role: "editor" } });
+      const denied = await app.inject({
+        method: "PATCH",
+        url: `/api/shared-funds/${shared.id}`,
+        headers: { cookie: bobCookie },
+        payload: { revision: shared.revision, name: "Không được sửa" },
+      });
+      expect(denied.statusCode).toBe(403);
+
+      const upgraded = await app.inject({
+        method: "PUT",
+        url: `/api/shared-funds/${shared.id}/members`,
+        headers: { cookie },
+        payload: { email: bob.email, role: "editor", revision: shared.revision },
+      });
       expect(upgraded.statusCode).toBe(200);
-      const contribution = await app.inject({ method: "POST", url: `/api/shared-funds/${shared.id}/contributions`, headers: { cookie: bobCookie }, payload: { month: "2026-07", amount: 250_000, note: "Góp quỹ" } });
+      const contribution = await app.inject({
+        method: "POST",
+        url: `/api/shared-funds/${shared.id}/contributions`,
+        headers: { cookie: bobCookie },
+        payload: { month: "2026-07", amount: 250_000, note: "Góp quỹ", revision: upgraded.json().revision },
+      });
       expect(contribution.statusCode).toBe(200);
-      expect(contribution.json().content.contributions["2026-07"]).toEqual([expect.objectContaining({ memberId: bob.sub, amount: 250_000, note: "Góp quỹ" })]);
-      const editable = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json().sharedFunds[0];
-      const saved = await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}`, headers: { cookie: bobCookie }, payload: { revision: editable.revision, content: editable.content } });
-      expect(saved.statusCode).toBe(200);
-      expect((await app.inject({ method: "PUT", url: `/api/shared-funds/${shared.id}`, headers: { cookie: bobCookie }, payload: { revision: editable.revision, content: editable.content } })).statusCode).toBe(409);
-      expect((await app.inject({ method: "DELETE", url: `/api/shared-funds/${shared.id}/members/${bob.sub}`, headers: { cookie } })).statusCode).toBe(204);
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json().sharedFunds).toEqual([]);
-    } finally {
-      await app.close();
-    }
-  });
-
-  it("chấp nhận object cũ, giữ thứ tự PUT và trả no-store", async () => {
-    const { app, cookie } = await createAuthenticatedApp({ initialData: { revision: 0 } });
-    try {
-      const [first, second] = await Promise.all([
-        app.inject({ method: "PUT", url: "/api/data", headers: { cookie }, payload: { revision: 1 } }),
-        app.inject({ method: "PUT", url: "/api/data", headers: { cookie }, payload: { revision: 2 } }),
+      expect(contribution.json().data).toEqual(
+        expect.objectContaining({ memberId: bob.sub, amount: 250_000, note: "Góp quỹ" }),
+      );
+      expect(Buffer.byteLength(contribution.body)).toBeLessThan(2 * 1024);
+      const contributions = (await app.inject({
+        method: "GET",
+        url: `/api/shared-funds/${shared.id}/contributions?year=2026&month=7`,
+        headers: { cookie: bobCookie },
+      })).json();
+      expect(contributions.items).toEqual([
+        expect.objectContaining({ memberId: bob.sub, amount: 250_000, note: "Góp quỹ" }),
       ]);
-      expect(first.statusCode).toBe(204);
-      expect(second.statusCode).toBe(204);
 
-      const read = await app.inject({ method: "GET", url: "/api/data", headers: { cookie } });
-      expect(read.statusCode).toBe(200);
-      expect(read.headers["cache-control"]).toBe("no-store");
-      expect(read.json()).toEqual({ data: { revision: 2 }, sharedFunds: [] });
+      const editable = (await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie: bobCookie },
+      })).json().funds.find((fund: { id: string }) => fund.id === shared.id);
+      const saved = await app.inject({
+        method: "PUT",
+        url: `/api/shared-funds/${shared.id}/months/2026/7`,
+        headers: { cookie: bobCookie },
+        payload: { revision: editable.revision, amount: 123_000 },
+      });
+      expect(saved.statusCode).toBe(200);
+      const stale = await app.inject({
+        method: "PUT",
+        url: `/api/shared-funds/${shared.id}/months/2026/7`,
+        headers: { cookie: bobCookie },
+        payload: { revision: editable.revision, amount: 456_000 },
+      });
+      expect(stale.statusCode).toBe(409);
+
+      expect((await app.inject({
+        method: "DELETE",
+        url: `/api/shared-funds/${shared.id}/members/${bob.sub}`,
+        headers: { cookie },
+        payload: { revision: saved.json().revision },
+      })).statusCode).toBe(200);
+      const afterRemoval = (await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie: bobCookie },
+      })).json();
+      expect(afterRemoval.funds.some((fund: { id: string }) => fund.id === shared.id)).toBe(false);
     } finally {
       await app.close();
     }
   });
 
-  it("chặn JSON lỗi, payload không phải object, body quá 5 MiB và sai method", async () => {
+  it("ghi CRUD chi tiết, soft-delete danh mục lịch sử và trả 409 khi revision stale", async () => {
+    const { app, cookie } = await createAuthenticatedApp();
+    try {
+      const initial = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/transactions",
+        headers: { cookie },
+        payload: {
+          expectedRevision: initial.workspaceRevision,
+          transaction: {
+            id: "txn-history",
+            date: "2026-07-27",
+            type: "expense",
+            cat: "food",
+            accountId: "cash",
+            amount: 125_000,
+            note: "Bữa trưa",
+          },
+        },
+      });
+      expect(created.statusCode).toBe(200);
+      expect(created.headers["cache-control"]).toBe("no-store");
+      const createdWorkspace = created.json();
+      expect(createdWorkspace.workspaceRevision).toBe(initial.workspaceRevision + 1);
+      expect(createdWorkspace.data).toEqual(expect.objectContaining({ id: "txn-history", amount: 125_000 }));
+      expect(Buffer.byteLength(created.body)).toBeLessThan(2 * 1024);
+
+      expect((await app.inject({
+        method: "POST",
+        url: "/api/transactions",
+        headers: { cookie },
+        payload: {
+          expectedRevision: initial.workspaceRevision,
+          transaction: {
+            date: "2026-07-27",
+            type: "expense",
+            cat: "food",
+            amount: 1,
+            note: "",
+          },
+        },
+      })).statusCode).toBe(409);
+
+      const deleted = await app.inject({
+        method: "DELETE",
+        url: "/api/categories/expense/food",
+        headers: { cookie },
+        payload: { expectedRevision: createdWorkspace.workspaceRevision },
+      });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json().data).toEqual({ deletedId: "food" });
+      const config = (await app.inject({
+        method: "GET",
+        url: "/api/expenses/config",
+        headers: { cookie },
+      })).json();
+      expect(config.categories.some((category: { id: string }) => category.id === "food")).toBe(false);
+      const history = (await app.inject({
+        method: "GET",
+        url: "/api/transactions?from=2026-07-01&to=2026-07-31&page=1&pageSize=10",
+        headers: { cookie },
+      })).json();
+      expect(history.items).toContainEqual(expect.objectContaining({ id: "txn-history", cat: "food" }));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("bootstrap nhỏ, phân trang giao dịch và tổng hợp chi tiêu/thống kê ở PostgreSQL", async () => {
+    const initialData = createDefaultStore();
+    initialData.years["2026"]!.funds.dp![6] = 1_000_000;
+    initialData.years["2026"]!.funds.dt![6] = 2_000_000;
+    for (let day = 1; day <= 12; day += 1) {
+      initialData.expense.txns.push({
+        id: `expense-${day}`,
+        date: `2026-07-${String(day).padStart(2, "0")}`,
+        type: "expense",
+        cat: "food",
+        accountId: "cash",
+        amount: day * 10_000,
+        note: `Bữa trưa ${day}`,
+      });
+    }
+    initialData.expense.txns.push({
+      id: "salary-july",
+      date: "2026-07-01",
+      type: "income",
+      cat: "salary",
+      amount: 20_000_000,
+      note: "Lương tháng 7",
+    });
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: initialData as unknown as StoredFinancePayload,
+    });
+    try {
+      const bootstrap = await app.inject({ method: "GET", url: "/api/data", headers: { cookie } });
+      expect(bootstrap.statusCode).toBe(200);
+      expect(bootstrap.json()).not.toHaveProperty("data");
+      expect(bootstrap.json()).not.toHaveProperty("transactions");
+      expect(Buffer.byteLength(bootstrap.body)).toBeLessThan(5 * 1024);
+      expect(bootstrap.headers["server-timing"]).toMatch(/db;dur=.*app;dur=/);
+      expect(Number(bootstrap.headers["x-response-bytes"])).toBe(Buffer.byteLength(bootstrap.body));
+
+      const page = (await app.inject({
+        method: "GET",
+        url: "/api/transactions?from=2026-07-01&to=2026-07-31&type=expense&page=1&pageSize=10",
+        headers: { cookie },
+      })).json();
+      expect(page).toMatchObject({ total: 12, page: 1, pageSize: 10, pageCount: 2 });
+      expect(page.items).toHaveLength(10);
+      expect(page.items[0].id).toBe("expense-12");
+      const compressedPage = await app.inject({
+        method: "GET",
+        url: "/api/transactions?from=2026-07-01&to=2026-07-31&type=expense&page=1&pageSize=10",
+        headers: { cookie, "accept-encoding": "gzip" },
+      });
+      expect(compressedPage.headers["content-encoding"]).toBe("gzip");
+      const search = (await app.inject({
+        method: "GET",
+        url: "/api/transactions?from=2026-07-01&to=2026-07-31&q=trưa%201&page=1&pageSize=100",
+        headers: { cookie },
+      })).json();
+      expect(search.total).toBe(4);
+
+      const summary = (await app.inject({
+        method: "GET",
+        url: "/api/expenses/summary?year=2026&month=7",
+        headers: { cookie },
+      })).json();
+      expect(summary).toMatchObject({
+        income: 20_000_000,
+        spent: 780_000,
+        funds: 3_000_000,
+        balance: 16_220_000,
+      });
+      expect(summary.accountExpenses).toEqual([
+        expect.objectContaining({ name: "Tiền mặt", amount: 780_000 }),
+      ]);
+
+      const statistics = (await app.inject({
+        method: "GET",
+        url: "/api/statistics?mode=month&month=2026-07",
+        headers: { cookie },
+      })).json();
+      expect(statistics.rows).toEqual([
+        expect.objectContaining({
+          key: "2026-07",
+          income: 20_000_000,
+          spent: 780_000,
+          funds: 3_000_000,
+          balance: 16_220_000,
+        }),
+      ]);
+      expect(Buffer.byteLength(JSON.stringify(summary))).toBeLessThan(10 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(10 * 1024);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("chỉ cập nhật hàng thay đổi, không tái tạo transaction, fund hoặc category không liên quan", async () => {
+    const initialData = createDefaultStore();
+    initialData.expense.txns.push({
+      id: "stable-transaction",
+      date: "2026-07-27",
+      type: "expense",
+      cat: "food",
+      accountId: "cash",
+      amount: 125_000,
+      note: "Giữ nguyên UUID nội bộ",
+    });
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: initialData as unknown as StoredFinancePayload,
+    });
+    try {
+      const [transactionBefore] = await postgres.client.db.select().from(schema.transactions)
+        .where(and(eq(schema.transactions.userId, profile.sub), eq(schema.transactions.externalId, "stable-transaction")));
+      const [fundBefore] = await postgres.client.db.select().from(schema.funds)
+        .where(and(eq(schema.funds.ownerId, profile.sub), eq(schema.funds.externalId, "dp")));
+      const [categoryBefore] = await postgres.client.db.select().from(schema.financeCategories)
+        .where(and(
+          eq(schema.financeCategories.userId, profile.sub),
+          eq(schema.financeCategories.type, "expense"),
+          eq(schema.financeCategories.externalId, "food"),
+        ));
+      const workspace = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
+      const preferences = await app.inject({
+        method: "PATCH",
+        url: "/api/preferences",
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision, showGoals: true },
+      });
+      expect(preferences.statusCode).toBe(200);
+      const note = await app.inject({
+        method: "PATCH",
+        url: "/api/years/2026/months/7",
+        headers: { cookie },
+        payload: { expectedRevision: preferences.json().workspaceRevision, note: "Chỉ đổi ghi chú" },
+      });
+      expect(note.statusCode).toBe(200);
+
+      const [transactionAfter] = await postgres.client.db.select().from(schema.transactions)
+        .where(and(eq(schema.transactions.userId, profile.sub), eq(schema.transactions.externalId, "stable-transaction")));
+      const [fundAfter] = await postgres.client.db.select().from(schema.funds)
+        .where(and(eq(schema.funds.ownerId, profile.sub), eq(schema.funds.externalId, "dp")));
+      const [categoryAfter] = await postgres.client.db.select().from(schema.financeCategories)
+        .where(and(
+          eq(schema.financeCategories.userId, profile.sub),
+          eq(schema.financeCategories.type, "expense"),
+          eq(schema.financeCategories.externalId, "food"),
+        ));
+      expect(transactionAfter?.id).toBe(transactionBefore?.id);
+      expect(transactionAfter?.createdAt).toEqual(transactionBefore?.createdAt);
+      expect(fundAfter?.id).toBe(fundBefore?.id);
+      expect(categoryAfter?.id).toBe(categoryBefore?.id);
+      expect(note.json().data).toEqual({ year: 2026, month: 7, note: "Chỉ đổi ghi chú" });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("ghi đúng fund detail, goal, account và transaction bằng CRUD hàng", async () => {
+    const { app, cookie } = await createAuthenticatedApp();
+    try {
+      let workspace = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
+      const fundMonth = await app.inject({
+        method: "PUT",
+        url: "/api/funds/dt/months/2026/7",
+        headers: { cookie },
+        payload: {
+          expectedRevision: workspace.workspaceRevision,
+          amount: 12_345_678,
+          detail: {
+            type: "hold",
+            lots: [{
+              ticker: "VNM",
+              qty: 10,
+              manualPrice: 72_000,
+              purchasePrice: 65_000,
+              purchaseFxVnd: null,
+              feeVnd: 15_000,
+            }],
+          },
+        },
+      });
+      expect(fundMonth.statusCode).toBe(200);
+      workspace = fundMonth.json();
+      const goal = await app.inject({
+        method: "PUT",
+        url: "/api/funds/dt/goals",
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision, year: 2026, amount: 50_000_000 },
+      });
+      expect(goal.statusCode).toBe(200);
+      workspace = goal.json();
+      const accountType = await app.inject({
+        method: "POST",
+        url: "/api/account-types",
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision, name: "Ví điện tử" },
+      });
+      expect(accountType.statusCode).toBe(200);
+      workspace = accountType.json();
+      const walletTypeId = workspace.data.id;
+      const account = await app.inject({
+        method: "POST",
+        url: "/api/accounts",
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision, name: "MoMo", typeId: walletTypeId },
+      });
+      expect(account.statusCode).toBe(200);
+      workspace = account.json();
+      const category = await app.inject({
+        method: "POST",
+        url: "/api/categories",
+        headers: { cookie },
+        payload: {
+          expectedRevision: workspace.workspaceRevision,
+          type: "expense",
+          name: "Y tế",
+          color: "#ff0000",
+          budget: 2_000_000,
+        },
+      });
+      expect(category.statusCode).toBe(200);
+      workspace = category.json();
+      const transaction = await app.inject({
+        method: "POST",
+        url: "/api/transactions",
+        headers: { cookie },
+        payload: {
+          expectedRevision: workspace.workspaceRevision,
+          transaction: {
+            id: "row-crud-transaction",
+            date: "2026-07-27",
+            type: "expense",
+            cat: "y-te",
+            accountId: "momo",
+            amount: 500_000,
+            note: "Khám bệnh",
+          },
+        },
+      });
+      expect(transaction.statusCode).toBe(200);
+      workspace = transaction.json();
+      const detail = (await app.inject({
+        method: "GET",
+        url: "/api/funds/dt/months/2026/7",
+        headers: { cookie },
+      })).json();
+      expect(detail.amount).toBe(12_345_678);
+      expect(detail.detail).toEqual({
+        type: "hold",
+        lots: [expect.objectContaining({ ticker: "VNM", qty: 10, manualPrice: 72_000 })],
+      });
+      const overview = (await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie },
+      })).json();
+      expect(overview.funds.find((fund: { id: string }) => fund.id === "dt").yearGoal).toBe(50_000_000);
+      const config = (await app.inject({
+        method: "GET",
+        url: "/api/expenses/config",
+        headers: { cookie },
+      })).json();
+      expect(config.accounts).toContainEqual({ id: "momo", name: "MoMo", typeId: walletTypeId });
+      const history = (await app.inject({
+        method: "GET",
+        url: "/api/transactions?from=2026-07-01&to=2026-07-31&page=1&pageSize=10",
+        headers: { cookie },
+      })).json();
+      expect(history.items).toContainEqual(expect.objectContaining({
+        id: "row-crud-transaction",
+        cat: "y-te",
+        accountId: "momo",
+      }));
+
+      const reset = await app.inject({
+        method: "POST",
+        url: "/api/years/2026/months/7/reset",
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision },
+      });
+      expect(reset.statusCode).toBe(200);
+      expect(reset.json().data).toEqual({ year: 2026, month: 7 });
+      const resetDetail = (await app.inject({
+        method: "GET",
+        url: "/api/funds/dt/months/2026/7",
+        headers: { cookie },
+      })).json();
+      expect(resetDetail.amount).toBe(0);
+      expect(resetDetail.detail).toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("chặn import lỗi, payload không phải object, body quá 5 MiB và snapshot API cũ", async () => {
     const { app, cookie } = await createAuthenticatedApp();
     try {
       const malformed = await app.inject({
         method: "PUT",
-        url: "/api/data",
+        url: "/api/data/import",
         headers: { cookie, "content-type": "application/json" },
         payload: "{\"broken\":",
       });
       expect(malformed.statusCode).toBe(400);
       expect(malformed.body).toBe("Invalid JSON");
 
-      const array = await app.inject({ method: "PUT", url: "/api/data", headers: { cookie }, payload: [] });
-      expect(array.statusCode).toBe(400);
+      expect((await app.inject({
+        method: "PUT",
+        url: "/api/data/import",
+        headers: { cookie },
+        payload: [],
+      })).statusCode).toBe(400);
 
       const oversized = await app.inject({
         method: "PUT",
-        url: "/api/data",
+        url: "/api/data/import",
         headers: { cookie, "content-type": "application/json" },
-        payload: JSON.stringify({ value: "x".repeat(5 * 1024 * 1024) }),
+        payload: JSON.stringify({ expectedRevision: 2, data: { value: "x".repeat(5 * 1024 * 1024) } }),
       });
       expect(oversized.statusCode).toBe(413);
       expect(oversized.body).toBe("Request body is too large");
-
-      const wrongMethod = await app.inject({ method: "POST", url: "/api/data", headers: { cookie }, payload: {} });
-      expect(wrongMethod.statusCode).toBe(405);
+      expect((await app.inject({ method: "PUT", url: "/api/data", headers: { cookie }, payload: {} })).statusCode).toBe(405);
     } finally {
       await app.close();
     }
   });
 
-  it("chuyển request market đã xác thực tới service và giữ lỗi upstream trong response", async () => {
+  it("lưu market quote trong cùng transaction với workspace revision", async () => {
     let received: unknown;
     const response: MarketQuotesResponse = {
       fetchedAt: new Date(0).toISOString(),
       fx: null,
       gold: null,
-      stocks: [],
+      stocks: [{
+        exchange: "HOSE",
+        symbol: "VNM",
+        priceVnd: 80_000,
+        source: "fixture",
+        fetchedAt: new Date(0).toISOString(),
+      }],
       crypto: [],
       matches: {},
       errors: [{ key: "HOSE:VNM", code: "upstream", message: "Nguồn giá tạm thời lỗi." }],
@@ -191,14 +665,37 @@ describe("Fastify data và market routes", () => {
         return response;
       },
     };
-    const { app, cookie } = await createAuthenticatedApp({ marketService });
+    const initialData = createDefaultStore();
+    initialData.years["2026"]!.funds.dt![6] = 720_000;
+    initialData.years["2026"]!.details.dt![6] = {
+      type: "hold",
+      lots: [{ ticker: "VNM", exchange: "HOSE", qty: 10, manualPrice: 72_000 }],
+    };
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: initialData as unknown as StoredFinancePayload,
+      marketService,
+    });
     try {
-      const request = { assets: [{ type: "stock" as const, symbol: "VNM", exchange: "HOSE" }], force: true };
-      const result = await app.inject({ method: "POST", url: "/api/market/quotes", headers: { cookie }, payload: request });
+      const initial = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
+      const quoteRequest = { assets: [{ type: "stock" as const, symbol: "VNM", exchange: "HOSE" }], force: true };
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/market/quotes",
+        headers: { cookie },
+        payload: { ...quoteRequest, expectedRevision: initial.workspaceRevision },
+      });
       expect(result.statusCode).toBe(200);
       expect(result.headers["cache-control"]).toBe("no-store");
-      expect(received).toEqual(request);
-      expect(result.json()).toEqual(response);
+      expect(received).toEqual(quoteRequest);
+      expect(result.json().quotes).toEqual(response);
+      expect(result.json().workspaceRevision).toBe(initial.workspaceRevision + 1);
+      expect(result.json().affectedPeriods).toContain("2026-07");
+      const detail = (await app.inject({
+        method: "GET",
+        url: "/api/funds/dt/months/2026/7",
+        headers: { cookie },
+      })).json();
+      expect(detail.amount).toBe(800_000);
     } finally {
       await app.close();
     }
@@ -206,8 +703,9 @@ describe("Fastify data và market routes", () => {
 });
 
 describe("Fastify SPA production", () => {
-  it("phục vụ bundle và deep link nhưng không lộ dotfile hay data.json", async () => {
-    const { directory, databasePath } = await createDatabase();
+  it("phục vụ bundle và deep link nhưng không lộ dotfile hay file ngoài bundle", async () => {
+    await postgres.reset();
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "finance-web-"));
     const webRoot = path.join(directory, "web");
     const distRoot = path.join(webRoot, "dist", "client");
     await fs.mkdir(path.join(distRoot, "assets"), { recursive: true });
@@ -215,7 +713,7 @@ describe("Fastify SPA production", () => {
     await fs.writeFile(path.join(distRoot, "assets", "app.js"), "globalThis.__APP__ = true;", "utf8");
     await fs.writeFile(path.join(distRoot, ".secret"), "not public", "utf8");
 
-    const app = await buildApp({ workspaceRoot: directory, databasePath, webRoot, env: {} });
+    const app = await buildApp({ workspaceRoot: directory, repository: postgres.repository, webRoot, env: {} });
     try {
       for (const route of ["/funds", "/expenses", "/statistics"]) {
         const response = await app.inject({ method: "GET", url: route });
@@ -227,10 +725,10 @@ describe("Fastify SPA production", () => {
       expect(asset.statusCode).toBe(200);
       expect(asset.headers["cache-control"]).toContain("immutable");
       expect((await app.inject({ method: "GET", url: "/.secret" })).statusCode).toBe(404);
-      expect((await app.inject({ method: "GET", url: "/data.json" })).statusCode).toBe(403);
       expect((await app.inject({ method: "GET", url: "/outside.txt" })).statusCode).toBe(404);
     } finally {
       await app.close();
+      await fs.rm(directory, { recursive: true, force: true });
     }
   });
 });

@@ -3,14 +3,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { createDefaultStore } from "@chi-tieu/shared";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { parseDotEnv } from "../src/lib/config.js";
 import { SESSION_TTL_MS } from "../src/lib/session.js";
 import type { FetchLike } from "../src/services/market.js";
+import { createPostgresTestContext, type PostgresTestContext } from "./postgres.js";
 
 const temporaryDirectories: string[] = [];
 let lastTokenBody = "";
+let postgres: PostgresTestContext;
+
+beforeAll(async () => {
+  postgres = await createPostgresTestContext();
+}, 120_000);
+
+afterAll(async () => {
+  await postgres?.close();
+}, 120_000);
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
@@ -37,18 +48,17 @@ const fakeGoogleFetch: FetchLike = async (input, options = {}) => {
 };
 
 async function withApp(
-  initialData: Record<string, unknown>,
-  run: (context: { app: FastifyInstance; databasePath: string }) => Promise<void>,
+  _initialData: unknown,
+  run: (context: { app: FastifyInstance }) => Promise<void>,
   env: NodeJS.ProcessEnv = {},
   options: { now?: () => number } = {},
 ): Promise<void> {
+  await postgres.reset();
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "finance-auth-"));
   temporaryDirectories.push(directory);
-  const databasePath = path.join(directory, "data.json");
-  await fs.writeFile(databasePath, JSON.stringify(initialData), "utf8");
   const app = await buildApp({
     workspaceRoot: directory,
-    databasePath,
+    repository: postgres.repository,
     serveWeb: false,
     env: {
       GOOGLE_CLIENT_ID: "client-id",
@@ -61,7 +71,7 @@ async function withApp(
     ...(options.now ? { now: options.now } : {}),
   });
   try {
-    await run({ app, databasePath });
+    await run({ app });
   } finally {
     await app.close();
   }
@@ -158,7 +168,7 @@ describe("Fastify API tương thích server cũ", () => {
       const data = await app.inject({ method: "GET", url: "/api/data" });
       expect(data.statusCode).toBe(401);
       expect(data.json()).toEqual({ error: "unauthorized", message: "Vui lòng đăng nhập để tiếp tục." });
-      expect((await app.inject({ method: "GET", url: "/data.json" })).statusCode).toBe(403);
+      expect((await app.inject({ method: "GET", url: "/data.json" })).statusCode).toBe(404);
       expect((await app.inject({ method: "POST", url: "/api/market/quotes", payload: {} })).statusCode).toBe(401);
     });
     await withApp({ years: {} }, async ({ app }) => {
@@ -175,7 +185,7 @@ describe("Fastify API tương thích server cũ", () => {
     const app = await buildApp({
       workspaceRoot: directory,
       webRoot,
-      databasePath: path.join(directory, "data.json"),
+      repository: postgres.repository,
       env: {},
     });
     try {
@@ -193,12 +203,11 @@ describe("Fastify API tương thích server cũ", () => {
     const webRoot = path.join(directory, "web");
     await fs.mkdir(path.join(webRoot, "dist", "client"), { recursive: true });
     await fs.writeFile(path.join(webRoot, "dist", "client", "index.html"), "<div data-page-link=\"statistics\"></div>");
-    const databasePath = path.join(directory, "data.json");
-    await fs.writeFile(databasePath, JSON.stringify({ years: {} }));
+    await postgres.reset();
     const app = await buildApp({
       workspaceRoot: directory,
       webRoot,
-      databasePath,
+      repository: postgres.repository,
       env: {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",
@@ -225,25 +234,56 @@ describe("Fastify API tương thích server cũ", () => {
     }
   });
 
-  it("tài khoản Google đầu tiên nhận dữ liệu cũ, tài khoản sau có sổ riêng", async () => {
-    const legacy = { years: { "2026": { income: [123] } }, funds: [{ id: "saving" }] };
-    await withApp(legacy, async ({ app, databasePath }) => {
+  it("mỗi tài khoản Google có workspace PostgreSQL riêng và import dùng revision", async () => {
+    const legacy = createDefaultStore();
+    legacy.years["2026"]!.income[0] = 123;
+    await withApp(legacy, async ({ app }) => {
       const aliceCookie = await login(app, "alice");
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: aliceCookie } })).json()).toEqual({ data: legacy, sharedFunds: [] });
+      const initialAlice = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie: aliceCookie } })).json();
+      expect(initialAlice.workspaceRevision).toBe(1);
+      expect(initialAlice.user.email).toBe("alice@example.com");
+      expect(initialAlice).not.toHaveProperty("data");
+      expect(initialAlice).not.toHaveProperty("sharedFunds");
+      expect(Buffer.byteLength(JSON.stringify(initialAlice))).toBeLessThan(5 * 1024);
 
-      const changed = { years: { "2027": { income: [999] } } };
-      const write = await app.inject({ method: "PUT", url: "/api/data", headers: { cookie: aliceCookie }, payload: changed });
-      expect(write.statusCode).toBe(204);
+      const imported = await app.inject({
+        method: "PUT",
+        url: "/api/data/import",
+        headers: { cookie: aliceCookie },
+        payload: { expectedRevision: initialAlice.workspaceRevision, data: legacy },
+      });
+      expect(imported.statusCode).toBe(200);
+      expect(imported.json().workspaceRevision).toBe(2);
+      expect(imported.json()).not.toHaveProperty("data");
+      const aliceBackup = (await app.inject({
+        method: "GET",
+        url: "/api/backup/export",
+        headers: { cookie: aliceCookie },
+      })).json();
+      expect(aliceBackup.years["2026"].income[0]).toBe(123);
 
       const bobCookie = await login(app, "bob", "/expenses");
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json()).toEqual({
-        data: { onboarding: { status: "pending", version: 1 } }, sharedFunds: [],
-      });
-      expect((await app.inject({ method: "GET", url: "/api/data", headers: { cookie: aliceCookie } })).json()).toEqual({ data: changed, sharedFunds: [] });
+      const bobWorkspace = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie: bobCookie } })).json();
+      expect(bobWorkspace.workspaceRevision).toBe(1);
+      expect(bobWorkspace.preferences.onboarding.status).toBe("pending");
+      const bobBackup = (await app.inject({
+        method: "GET",
+        url: "/api/backup/export",
+        headers: { cookie: bobCookie },
+      })).json();
+      expect(bobBackup.years["2026"]?.income[0] ?? 0).toBe(0);
+      expect((await app.inject({
+        method: "GET",
+        url: "/api/backup/export",
+        headers: { cookie: aliceCookie },
+      })).json().years["2026"].income[0]).toBe(123);
 
-      const stored = JSON.parse(await fs.readFile(databasePath, "utf8"));
-      expect(stored.schemaVersion).toBe(4);
-      expect(stored.users["google-alice"].data).toEqual(changed);
+      expect((await app.inject({
+        method: "PUT",
+        url: "/api/data/import",
+        headers: { cookie: aliceCookie },
+        payload: { expectedRevision: 1, data: legacy },
+      })).statusCode).toBe(409);
     });
   });
 

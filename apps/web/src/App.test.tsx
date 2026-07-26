@@ -1,4 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type {
+  FinanceStore,
+  StatisticsScope,
+  Transaction,
+} from "@chi-tieu/shared";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -14,18 +19,184 @@ function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function authenticatedFetch(putStatus = 204, prepareLedger?: (ledger: ReturnType<typeof createDefaultStore>) => void) {
+function authenticatedFetch(mutationStatus = 200, prepareLedger?: (ledger: ReturnType<typeof createDefaultStore>) => void) {
   const ledger = createDefaultStore();
   prepareLedger?.(ledger);
+  let revision = 1;
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/auth/me") return jsonResponse({ user: { sub: "1", email: "test@example.com", name: "Người dùng", picture: "" } });
-    if (url === "/api/data" && init?.method === "PUT") {
-      return putStatus === 204 ? new Response(null, { status: 204 }) : jsonResponse({ error: "unauthorized" }, putStatus);
+    if (url === "/api/data") return jsonResponse(bootstrapResponse(ledger, revision));
+    if (url === "/api/backup/export") return jsonResponse(ledger);
+    if (url === "/api/expenses/config") return jsonResponse({
+      categories: ledger.expense.cats,
+      incomeCategories: ledger.expense.incomeCats,
+      accountTypes: ledger.expense.accountTypes,
+      accounts: ledger.expense.accounts,
+    });
+    if (url.startsWith("/api/expenses/summary?")) {
+      const params = new URL(url, "http://localhost").searchParams;
+      return jsonResponse(expenseSummary(ledger, Number(params.get("year")), Number(params.get("month"))));
     }
-    if (url === "/api/data") return jsonResponse(ledger);
+    if (url.startsWith("/api/transactions?")) {
+      return jsonResponse(transactionPage(ledger, new URL(url, "http://localhost").searchParams));
+    }
+    if (url.startsWith("/api/statistics?")) {
+      return jsonResponse(statisticsResponse(ledger, new URL(url, "http://localhost").searchParams));
+    }
+    if (init?.method && init.method !== "GET") {
+      if (mutationStatus !== 200 && url === "/api/transactions") {
+        return jsonResponse(
+          mutationStatus === 409
+            ? { error: "revision_conflict", message: "Dữ liệu đã thay đổi." }
+            : { error: "unauthorized" },
+          mutationStatus,
+        );
+      }
+      let data: unknown = {};
+      if (url === "/api/transactions" && init.method === "POST") {
+        const payload = JSON.parse(String(init.body)) as { transaction: ReturnType<typeof createDefaultStore>["expense"]["txns"][number] };
+        ledger.expense.txns.push(payload.transaction);
+        data = payload.transaction;
+      } else if (/^\/api\/years\/\d+$/.test(url)) {
+        data = { year: Number(url.slice(url.lastIndexOf("/") + 1)) };
+      }
+      revision += 1;
+      return jsonResponse({ data, workspaceRevision: revision });
+    }
     return new Response(null, { status: 204 });
   });
+}
+
+function bootstrapResponse(ledger: FinanceStore, workspaceRevision: number) {
+  return {
+    user: { sub: "1", email: "test@example.com", name: "Người dùng", picture: "" },
+    workspaceRevision,
+    preferences: {
+      showGoals: ledger.showGoals,
+      onboarding: ledger.onboarding,
+      financialProfile: {
+        monthlyIncome: ledger.financialProfile.monthlyIncome,
+        emergencyFundGoal: ledger.financialProfile.emergencyFundGoal,
+        debt: ledger.financialProfile.debt,
+      },
+      incomeMigrationVersion: ledger.incomeMigrationVersion ?? 1,
+      futureIncomeResetVersion: ledger.futureIncomeResetVersion ?? 1,
+      ...(ledger.usdRate !== undefined ? { usdRate: ledger.usdRate } : {}),
+    },
+    availableYears: Object.keys(ledger.years).map(Number),
+  };
+}
+
+function filteredTransactions(ledger: FinanceStore, params: URLSearchParams): Transaction[] {
+  const from = params.get("from") ?? "0000-01-01";
+  const to = params.get("to") ?? "9999-12-31";
+  const type = params.get("type");
+  const categoryId = params.get("categoryId");
+  const accountId = params.get("accountId");
+  const q = params.get("q")?.toLocaleLowerCase("vi") ?? "";
+  return ledger.expense.txns
+    .filter((transaction) => transaction.date >= from && transaction.date <= to)
+    .filter((transaction) => !type || transaction.type === type)
+    .filter((transaction) => !categoryId || transaction.cat === categoryId)
+    .filter((transaction) => !accountId || transaction.accountId === accountId)
+    .filter((transaction) => !q || transaction.note.toLocaleLowerCase("vi").includes(q))
+    .sort((left, right) => right.date.localeCompare(left.date) || right.id.localeCompare(left.id));
+}
+
+function transactionPage(ledger: FinanceStore, params: URLSearchParams) {
+  const items = filteredTransactions(ledger, params);
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const pageSize = Math.max(1, Number(params.get("pageSize")) || 10);
+  return {
+    items: items.slice((page - 1) * pageSize, page * pageSize),
+    total: items.length,
+    page,
+    pageSize,
+    pageCount: Math.max(1, Math.ceil(items.length / pageSize)),
+  };
+}
+
+function expenseSummary(ledger: FinanceStore, year: number, month: number) {
+  const prefix = `${year}-${String(month).padStart(2, "0")}`;
+  const transactions = ledger.expense.txns.filter((transaction) => transaction.date.startsWith(prefix));
+  const income = transactions.filter((transaction) => transaction.type === "income")
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const spent = transactions.filter((transaction) => transaction.type === "expense")
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  const funds = Object.values(ledger.years[String(year)]?.funds ?? {})
+    .reduce((sum, values) => sum + (values[month - 1] ?? 0), 0);
+  const byExpenseCategory: Record<string, number> = {};
+  const byIncomeCategory: Record<string, number> = {};
+  const byAccount: Record<string, number> = {};
+  for (const transaction of transactions) {
+    const target = transaction.type === "expense" ? byExpenseCategory : byIncomeCategory;
+    target[transaction.cat] = (target[transaction.cat] ?? 0) + transaction.amount;
+    if (transaction.type === "expense" && transaction.accountId) {
+      byAccount[transaction.accountId] = (byAccount[transaction.accountId] ?? 0) + transaction.amount;
+    }
+  }
+  return {
+    year,
+    month,
+    income,
+    spent,
+    funds,
+    balance: income - spent - funds,
+    byExpenseCategory,
+    byIncomeCategory,
+    accountExpenses: ledger.expense.accounts
+      .filter((account) => byAccount[account.id])
+      .map((account) => ({ id: account.id, name: account.name, color: "#3D5A80", amount: byAccount[account.id]! })),
+  };
+}
+
+function statisticsResponse(ledger: FinanceStore, params: URLSearchParams) {
+  const mode = params.get("mode") ?? "all";
+  const scope: StatisticsScope = mode === "year"
+    ? { mode, year: Number(params.get("year")) }
+    : mode === "month"
+      ? { mode, month: params.get("month")! }
+      : mode === "range"
+        ? { mode, from: params.get("from")!, to: params.get("to")! }
+        : { mode: "all" };
+  const availableYears = Object.keys(ledger.years).map(Number);
+  const periods = availableYears.flatMap((year) =>
+    Array.from({ length: 12 }, (_, month) => ({ year, month, key: `${year}-${String(month + 1).padStart(2, "0")}` })))
+    .filter((period) => scope.mode === "all"
+      || (scope.mode === "year" && period.year === scope.year)
+      || (scope.mode === "month" && period.key === scope.month)
+      || (scope.mode === "range" && period.key >= scope.from && period.key <= scope.to));
+  const rows = periods.map((period) => {
+    const summary = expenseSummary(ledger, period.year, period.month + 1);
+    return {
+      ...period,
+      income: summary.income,
+      spent: summary.spent,
+      funds: summary.funds,
+      balance: summary.balance,
+      byFund: Object.fromEntries(ledger.funds.map((fund) => [
+        fund.id,
+        ledger.years[String(period.year)]?.funds[fund.id]?.[period.month] ?? 0,
+      ])),
+    };
+  });
+  const totals = rows.reduce((result, row) => ({
+    income: result.income + row.income,
+    spent: result.spent + row.spent,
+    funds: result.funds + row.funds,
+    balance: result.balance + row.balance,
+  }), { income: 0, spent: 0, funds: 0, balance: 0 });
+  return {
+    scope,
+    availableYears,
+    funds: ledger.funds.map(({ id, name, color }) => ({ id, name, color })),
+    rows,
+    totals,
+    expenseBreakdown: [],
+    incomeBreakdown: [],
+    accountExpenses: [],
+  };
 }
 
 beforeEach(() => {
@@ -34,6 +205,19 @@ beforeEach(() => {
     authMessage: "",
     user: null,
     ledger: createDefaultStore(),
+    sharedFunds: {},
+    bootstrapData: null,
+    expenseConfig: null,
+    expenseSummary: null,
+    transactionPage: null,
+    transactionQuery: null,
+    fundOverview: null,
+    fundDetails: {},
+    statistics: null,
+    expensesState: "idle",
+    fundsState: "idle",
+    statisticsState: "idle",
+    workspaceRevision: 1,
     loaded: false,
     selectedYear: 2026,
     selectedMonth: 6,
@@ -56,7 +240,7 @@ describe("App", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<MemoryRouter initialEntries={["/statistics"]}><App /></MemoryRouter>);
     expect(await screen.findByRole("heading", { name: "Thống kê tài chính" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: /Diễn biến tích lũy/ })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: /Diễn biến tích lũy/ }, { timeout: 5_000 })).toBeVisible();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/data", expect.anything()));
   });
 
@@ -65,7 +249,7 @@ describe("App", () => {
     render(<MemoryRouter initialEntries={["/statistics"]}><App /></MemoryRouter>);
     await screen.findByRole("heading", { name: "Thống kê tài chính" });
 
-    fireEvent.click(screen.getByRole("combobox", { name: "Phạm vi" }));
+    fireEvent.click(await screen.findByRole("combobox", { name: "Phạm vi" }, { timeout: 5_000 }));
     fireEvent.click(screen.getByRole("option", { name: "Tháng cụ thể" }));
     expect(screen.getByRole("combobox", { name: "Tháng thống kê" })).toBeVisible();
 
@@ -76,16 +260,16 @@ describe("App", () => {
   });
 
   it("hiển thị chi tiêu theo tài khoản trên trang chi tiêu", async () => {
-    vi.stubGlobal("fetch", authenticatedFetch(204, (ledger) => {
+    vi.stubGlobal("fetch", authenticatedFetch(200, (ledger) => {
       ledger.expense.txns.push({ id: "cash-expense", date: "2026-07-01", type: "expense", cat: "food", accountId: "cash", amount: 250_000, note: "Trưa" });
     }));
     render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
-    expect(await screen.findByRole("heading", { name: "Chi tiêu theo tài khoản" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Chi tiêu theo tài khoản" }, { timeout: 5_000 })).toBeVisible();
     expect(screen.getAllByText("Tiền mặt").length).toBeGreaterThan(0);
   });
 
   it("phân trang lịch sử thu chi theo 10 giao dịch", async () => {
-    vi.stubGlobal("fetch", authenticatedFetch(204, (ledger) => {
+    vi.stubGlobal("fetch", authenticatedFetch(200, (ledger) => {
       for (let index = 1; index <= 11; index += 1) {
         ledger.expense.txns.push({ id: `history-${index}`, date: `2026-07-${String(index).padStart(2, "0")}`, type: "expense", cat: "food", amount: index, note: `Lịch sử ${index}` });
       }
@@ -96,8 +280,8 @@ describe("App", () => {
     expect(screen.queryByText("Lịch sử 1")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Sau →" }));
-    expect(screen.getByText("Lịch sử 1")).toBeVisible();
-    expect(screen.queryByText("Lịch sử 11")).not.toBeInTheDocument();
+    expect(await screen.findByText("Lịch sử 1")).toBeVisible();
+    await waitFor(() => expect(screen.queryByText("Lịch sử 11")).not.toBeInTheDocument());
   });
 
   it("cho chọn thêm năm trong picker và đóng khi click ra ngoài", async () => {
@@ -113,12 +297,13 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("option", { name: "2030" }));
     expect(screen.getByRole("button", { name: "Tháng 7, 2030" })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Đã lưu"));
 
     fireEvent.pointerDown(document.body);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Chọn tháng và năm" })).not.toBeInTheDocument());
   });
 
-  it("thêm giao dịch ngay trên UI rồi xếp snapshot vào PUT /api/data", async () => {
+  it("thêm giao dịch optimistic rồi gọi CRUD transaction với revision", async () => {
     const fetchMock = authenticatedFetch();
     vi.stubGlobal("fetch", fetchMock);
     render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
@@ -132,14 +317,41 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ Thêm khoản" }));
 
     expect(await screen.findByText("Bữa trưa RTL")).toBeVisible();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/data", expect.objectContaining({ method: "PUT" })));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/transactions", expect.objectContaining({ method: "POST" })));
     expect(screen.getByRole("status")).toHaveTextContent("Đã lưu");
   });
 
   it("quay về auth gate khi hàng đợi lưu nhận 401", async () => {
     vi.stubGlobal("fetch", authenticatedFetch(401));
     render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "Theo dõi chi tiêu" });
+    const amount = screen.getByRole("textbox", { name: "Số tiền" });
+    fireEvent.focus(amount);
+    fireEvent.change(amount, { target: { value: "1000" } });
+    fireEvent.blur(amount);
+    fireEvent.click(screen.getByRole("button", { name: "+ Thêm khoản" }));
     expect(await screen.findByRole("button", { name: "Đăng nhập với Google" })).toBeVisible();
     expect(screen.getByText("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.")).toBeVisible();
+  });
+
+  it("xóa cache optimistic và tải lại route hiện tại khi revision trả 409", async () => {
+    const fetchMock = authenticatedFetch(409);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "Theo dõi chi tiêu" });
+
+    const amount = screen.getByRole("textbox", { name: "Số tiền" });
+    fireEvent.focus(amount);
+    fireEvent.change(amount, { target: { value: "99000" } });
+    fireEvent.blur(amount);
+    fireEvent.change(screen.getByRole("textbox", { name: "Ghi chú" }), { target: { value: "Sẽ rollback" } });
+    fireEvent.click(screen.getByRole("button", { name: "+ Thêm khoản" }));
+
+    await waitFor(() => {
+      const bootstrapCalls = fetchMock.mock.calls.filter(([url]) => String(url) === "/api/data");
+      expect(bootstrapCalls).toHaveLength(2);
+    });
+    await waitFor(() => expect(screen.queryByText("Sẽ rollback")).not.toBeInTheDocument());
+    expect(screen.getByRole("status")).toHaveTextContent("Đã tải lại dữ liệu mới nhất");
   });
 });

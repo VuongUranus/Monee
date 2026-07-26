@@ -1,22 +1,18 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { UserDatabase, UserProfile } from "@chi-tieu/shared";
+import type { StoredFinancePayload, UserProfile } from "@chi-tieu/shared";
 import { buildApp } from "../src/app.js";
 import { SESSION_TTL_MS } from "../src/lib/session.js";
+import { createPostgresTestContext, seedUser } from "./postgres.js";
 
-const testDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "finance-e2e-"));
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(sourceDirectory, "../../..");
-const databasePath = path.join(testDirectory, "data.json");
 const profile: UserProfile = {
   sub: "e2e-user",
   email: "e2e@example.com",
   name: "Người dùng E2E",
   picture: "",
 };
-const now = new Date().toISOString();
 const funds = [
   { id: "dp", name: "Quỹ dự phòng", color: "#3f7d5c", cat: "saving" },
   { id: "dt", name: "Quỹ đầu tư", color: "#3b6ea5", cat: "stock" },
@@ -52,23 +48,14 @@ const testLedger = {
     debt: { balance: 0, monthlyPayment: 0 },
   },
 };
-const database: UserDatabase = {
-  schemaVersion: 3,
-  users: {
-    [profile.sub]: {
-      profile,
-      data: testLedger as unknown as Record<string, unknown>,
-      createdAt: now,
-      updatedAt: now,
-    },
-  },
-};
-await fs.writeFile(databasePath, JSON.stringify(database), "utf8");
+const postgres = await createPostgresTestContext();
+await postgres.reset();
+await seedUser(postgres, profile, testLedger as unknown as StoredFinancePayload);
 
 const port = Number(process.env.E2E_PORT || 3107);
 const app = await buildApp({
   workspaceRoot,
-  databasePath,
+  repository: postgres.repository,
   env: {
     SESSION_SECRET: "e2e-session-secret-at-least-twenty-bytes",
     APP_BASE_URL: `http://127.0.0.1:${port}`,
@@ -90,7 +77,7 @@ app.get("/__test/login", async (_request, reply) => {
 
 const cleanup = async (): Promise<void> => {
   await app.close().catch(() => undefined);
-  await fs.rm(testDirectory, { recursive: true, force: true });
+  await postgres.close().catch(() => undefined);
 };
 process.once("SIGTERM", () => void cleanup().finally(() => process.exit(0)));
 process.once("SIGINT", () => void cleanup().finally(() => process.exit(0)));

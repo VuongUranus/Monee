@@ -1,4 +1,5 @@
 .env
+data.json
 AGENT.md
 node_modules/
 **/dist/

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { NavLink, useLocation } from "react-router";
 import { BackupModal } from "./BackupModal";
 import { Select } from "./Select";
-import { downloadBackup, ensureYear, mergeSharedFunds, MONTHS_FULL, normalizeStore, privateLedger, years } from "@/lib/domain";
+import { api } from "@/lib/api";
+import { downloadBackup, ensureYear, mergeSharedFunds, MONTHS_FULL, normalizeStore, years } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
 
 const pageCopy = {
@@ -81,9 +82,18 @@ export function AppShell({ children }: PropsWithChildren) {
       setPeriod(now.getFullYear(), now.getMonth());
       window.alert("Đã nhập dữ liệu thành công.");
     } catch {
-      window.alert("File không hợp lệ. Hãy chọn file JSON đã xuất từ ứng dụng.");
+      window.alert("Tệp không hợp lệ. Hãy chọn bản sao lưu đã xuất từ ứng dụng.");
     } finally {
       if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  const exportBackup = async (): Promise<void> => {
+    try {
+      const payload = await api.exportBackup();
+      setBackup(downloadBackup(normalizeStore(payload).store));
+    } catch {
+      window.alert("Không thể xuất sao lưu. Hãy thử lại.");
     }
   };
 
@@ -162,7 +172,7 @@ export function AppShell({ children }: PropsWithChildren) {
             </div>
           ) : null}
           <span className="spacer" />
-          <button className="btn sm" type="button" onClick={() => setBackup(downloadBackup(privateLedger(ledger)))}>⬇ Xuất sao lưu</button>
+          <button className="btn sm" type="button" onClick={() => void exportBackup()}>⬇ Xuất sao lưu</button>
           <button className="btn sm" type="button" onClick={() => inputRef.current?.click()}>⬆ Nhập sao lưu</button>
           <input
             ref={inputRef}
@@ -184,7 +194,7 @@ export function AppShell({ children }: PropsWithChildren) {
       </main>
 
       <footer className="site-footer">
-        Dữ liệu lưu trong file <code>data.json</code> trên server. Sao lưu chỉ gồm dữ liệu cá nhân; quỹ chung được quản lý trên server.
+        Sao lưu chỉ gồm dữ liệu cá nhân; quỹ chung được quản lý riêng.
       </footer>
 
       {backup ? <BackupModal {...backup} onClose={() => setBackup(null)} /> : null}

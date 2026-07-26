@@ -1,36 +1,76 @@
 # Chi tiêu cá nhân
 
-Ứng dụng theo dõi quỹ, thu chi và tài sản cá nhân. Fastify phục vụ API và bundle React SPA trên cùng origin; dữ liệu vẫn được lưu trong `data.json` tại root.
-
-## Chia sẻ quỹ
-
-Trong **Quỹ → Quản lý quỹ**, chủ quỹ có thể chia sẻ từng quỹ với một email Google đã từng đăng nhập ứng dụng. Quyền **Chỉ xem** chỉ cho phép đọc, còn **Chỉnh sửa** cho phép sửa nội dung và cấu trúc quỹ. Chỉ chủ quỹ được quản lý thành viên hoặc xóa quỹ. Quỹ được mời không ảnh hưởng tới thu chi và báo cáo cá nhân của người nhận; sao lưu cũng chỉ gồm dữ liệu cá nhân.
+Ứng dụng theo dõi quỹ, thu chi và tài sản cá nhân. Fastify là backend duy nhất truy cập Neon PostgreSQL; React chỉ làm việc qua API cùng origin. Dữ liệu nghiệp vụ được chuẩn hoá thành các bảng quan hệ, không lưu snapshot hay payload nghiệp vụ bằng JSONB.
 
 ## Yêu cầu
 
 - Node.js `>=20.19`
 - npm đi kèm Node.js
+- Neon PostgreSQL
 - Google OAuth client loại **Web application**
+- Docker cho integration test PostgreSQL/Testcontainers
 
-## Cài đặt và cấu hình
+## Cấu hình Neon
+
+Tạo project/branch Neon gần region chạy Fastify rồi sao chép `.env.example` thành `.env`:
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Điền `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` và một `SESSION_SECRET` ngẫu nhiên dài trong `.env`. Redirect URI của Google phải là:
+Hai URL có mục đích tách biệt:
 
-```text
-http://127.0.0.1:3000/api/auth/google/callback
+- `DATABASE_URL`: URL pooled có hostname `-pooler`, dùng bởi Fastify runtime. Pool ứng dụng tối đa 10 connection.
+- `DATABASE_MIGRATION_URL`: URL direct, dùng riêng cho migration, import và verify.
+
+Không dùng `drizzle-kit push` ở production và server không tự chạy migration lúc khởi động.
+
+### Độ trễ
+
+- Đặt Fastify và Neon trong cùng region. Nếu chạy backend tại Việt Nam/Singapore, ưu tiên project Neon AWS Singapore (`aws-ap-southeast-1`) thay vì US East; region của project đã tạo không đổi tại chỗ, cần tạo project mới rồi migrate dữ liệu.
+- Neon Free scale compute về zero sau thời gian idle, nên request đầu tiên có thể chậm hơn; các request nóng mới là số liệu phù hợp để đánh giá query.
+- Runtime phải dùng pooled URL có `-pooler`; direct URL chỉ dành cho migration/import/verify.
+- Dùng `sslmode=verify-full` trong connection string để xác minh hostname/chứng chỉ rõ ràng và tránh thay đổi semantics của `pg` phiên bản tương lai.
+- `/api/data` chỉ trả bootstrap nhỏ. Các màn hình gọi read model riêng; CRUD thông thường chỉ cập nhật các hàng thay đổi. Full assembler chỉ dùng khi xuất backup, import rehearsal và verify.
+
+## Migration và import
+
+Migration SQL được commit trong `apps/server/drizzle/`.
+
+```bash
+npm run db:generate
+npm run db:migrate
+npm run db:import-json -- --file ./data.json
+npm run db:verify-json -- --file ./data.json
 ```
 
-Khi triển khai HTTPS, đổi `APP_BASE_URL` sang URL thật. Cookie phiên sẽ tự bật `Secure`.
+Importer hỗ trợ database JSON schema v3/v4, chuẩn hoá market legacy, account/category/onboarding và income legacy. Toàn bộ users, quỹ cá nhân/chung, member, contribution và dữ liệu con được ghi trong một transaction.
+
+Importer:
+
+- ghi SHA-256 và thống kê vào `data_imports`;
+- no-op khi checksum đã được import;
+- từ chối ghi đè nếu database đã chứa dữ liệu khác;
+- tự deep-compare workspace canonical sau import;
+- đối soát thêm số user, quỹ, transaction, lot, member và contribution.
+
+`db:verify-json` dùng để xác nhận snapshot tại thời điểm cutover. Sau khi ứng dụng đã phát sinh CRUD mới, việc Neon khác file backup cũ là bình thường; không import lại snapshot cũ để “sửa” chênh lệch này.
+
+### Cutover production
+
+1. Chạy migration/import/verify trên một Neon branch rehearsal.
+2. Trong maintenance window, dừng phiên bản còn ghi JSON.
+3. Chạy lại migration/import/verify trên branch chính với file cuối cùng.
+4. Deploy bằng pooled `DATABASE_URL`, rồi smoke-test đăng nhập, đọc, CRUD, chia sẻ và backup.
+5. Chỉ sau khi verify production thành công mới chạy `git rm data.json` và giữ một bản rollback ngoài repository.
+
+`data.json` đã nằm trong `.gitignore`, nhưng bản đang được Git theo dõi phải được giữ nguyên cho đến bước 5.
 
 ## Chạy ứng dụng
 
 ```bash
-# Phát triển: Fastify + Vite HMR tại cùng origin
+# Fastify + Vite HMR cùng origin
 npm run dev
 
 # Production
@@ -38,19 +78,36 @@ npm run build
 npm start
 ```
 
-Mở `http://127.0.0.1:3000`. `/` chuyển tới `/expenses`; các deep link `/funds`, `/expenses`, `/statistics` đều có thể refresh trực tiếp.
+Mở `http://127.0.0.1:3000`. `/` chuyển tới `/expenses`; các deep link `/funds`, `/expenses`, `/statistics` refresh trực tiếp.
+
+Fastify kiểm tra `SELECT 1` khi startup và đóng pool theo lifecycle. Mọi mutation cá nhân dùng `workspaceRevision`; quỹ chung dùng revision riêng và trả `409` khi client stale.
+
+Các read model chính:
+
+- `GET /api/data`: user, preferences, revision và danh sách năm.
+- `GET /api/expenses/config`, `GET /api/expenses/summary`: cấu hình và tổng hợp chi tiêu.
+- `GET /api/transactions`: lọc, tìm kiếm và phân trang server-side.
+- `GET /api/funds/overview`, `GET /api/funds/:id/months/:year/:month`: tổng quan và chi tiết tải lười.
+- `GET /api/statistics`: thống kê đã `GROUP BY` ở PostgreSQL.
+- `GET /api/backup/export`: endpoint online duy nhất dựng đầy đủ dữ liệu private.
+
+API lớn hơn 1 KiB được nén bằng Brotli/gzip/deflate. Response API có `Cache-Control: no-store`, `Server-Timing` cho thời gian DB/app và `X-Response-Bytes` để chẩn đoán latency.
+
+Xem [tài liệu HTTP API](docs/API.md) để biết đầy đủ chức năng, request, response, phân trang, quyền quỹ chung và quy tắc revision conflict.
+
+## Chia sẻ quỹ
+
+Trong **Quỹ → Quản lý quỹ**, chủ quỹ có thể chia sẻ từng quỹ với email Google đã từng đăng nhập. Viewer chỉ đọc; editor sửa metadata, month/detail, goal và contribution; chỉ owner quản lý member hoặc xoá quỹ. Backup cá nhân không ghi đè quỹ chung.
 
 ## Cấu trúc
 
 ```text
 apps/
-  server/       Fastify, OAuth, repository JSON, market service, SPA hosting
+  server/       Fastify, OAuth, Drizzle schema/repository, migration/import, market, SPA hosting
   web/          React, React Router, Zustand, Chart.js, Flatpickr
 packages/
-  shared/       Kiểu dữ liệu và hợp đồng API dùng chung
+  shared/       Kiểu dữ liệu, API contracts và canonical legacy normalization
 ```
-
-`apps/server/src/app.ts` xuất factory `buildApp(options)` để test bằng `app.inject()` mà không mở cổng. Production chỉ cần Fastify và bundle tại `apps/web/dist/client`; trình duyệt không tải thư viện từ CDN.
 
 ## Kiểm tra
 
@@ -62,19 +119,10 @@ npm run test:e2e
 npm run build
 ```
 
-Lần đầu chạy E2E cần cài Chromium do Playwright quản lý:
+Integration test tạo PostgreSQL thật bằng Testcontainers (hoặc dùng `TEST_DATABASE_URL`) và mỗi suite dùng database cô lập. Lần đầu chạy E2E có thể cần:
 
 ```bash
 npx playwright install chromium
 ```
 
-E2E dùng database tạm và route đăng nhập chỉ có trong test server. Bộ test không đọc/ghi `data.json` thật.
-
-## Dữ liệu và an toàn
-
-- Không sửa hoặc format lại `data.json` thủ công.
-- Repository ghi qua file tạm rồi rename nguyên tử và tuần tự hóa các lượt ghi.
-- Giới hạn payload là 5 MiB.
-- Server tĩnh chỉ phục vụ bundle; `data.json`, dotfile và file ngoài bundle không thể truy cập.
-- Session và OAuth state ở bộ nhớ, nên người dùng cần đăng nhập lại sau khi restart server.
-- Bản sao lưu từ phiên bản cũ vẫn được chuẩn hóa khi nhập.
+Session OAuth vẫn ở memory, nên người dùng đăng nhập lại sau khi server restart. Giới hạn body API là 5 MiB.

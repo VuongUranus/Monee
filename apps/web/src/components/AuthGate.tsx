@@ -11,7 +11,7 @@ export function AuthGate() {
         <div className="brand-mark" aria-hidden="true">₫</div>
         <p className="eyebrow">Tài chính cá nhân</p>
         <h1>{auth === "checking" ? "Đang kiểm tra đăng nhập…" : "Theo dõi quỹ và chi tiêu"}</h1>
-        <p>Dữ liệu của mỗi tài khoản được lưu riêng trong file dữ liệu trên server.</p>
+        <p>Dữ liệu của mỗi tài khoản được lưu riêng tư và an toàn.</p>
         {auth !== "checking" ? (
           <button className="btn primary" type="button" onClick={beginLogin}>Đăng nhập với Google</button>
         ) : null}

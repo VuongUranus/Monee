@@ -35,9 +35,9 @@ test("thêm, sửa, lọc và xóa giao dịch", async ({ page }, testInfo) => {
   await expect(page.getByText("Bữa trưa đã sửa")).toBeVisible();
 
   await page.getByRole("textbox", { name: "Tìm ghi chú", exact: true }).fill("đã sửa");
-  await expect(page.getByText("Hiển thị 1/1 khoản")).toBeVisible();
+  await expect(page.getByText("Có 1 khoản · 1–1")).toBeVisible();
   await page.getByLabel("Xóa giao dịch").click();
-  await expect(page.getByText("Chưa có khoản nào trong tháng này.")).toBeVisible();
+  await expect(page.getByText("Không tìm thấy giao dịch phù hợp.")).toBeVisible();
 });
 
 test("phân bổ quỹ, chi tiết tài sản và sao lưu", async ({ page }, testInfo) => {
@@ -109,6 +109,7 @@ test("chuyển tháng năm và CRUD quỹ, danh mục", async ({ page }, testInf
   await categoryName.fill("Danh mục đã đổi");
   await categoryName.blur();
   await expect(categoryName).toHaveValue("Danh mục đã đổi");
+  await expect(page.getByRole("status")).toContainText("Đã lưu");
   await categoryRow.getByRole("button", { name: "Xóa" }).click();
   await expect(categoryDialog.locator(".manager-row.category-row")).toHaveCount(1);
 });
@@ -128,6 +129,7 @@ test("quản lý tài khoản và gán tài khoản cho giao dịch", async ({ p
   await accountDialog.getByRole("button", { name: "+ Thêm", exact: true }).click();
   const accountName = accountDialog.getByLabel("Tên VCB kiểm thử");
   await expect(accountName).toHaveValue("VCB kiểm thử");
+  await expect(page.getByRole("status")).toContainText("Đã lưu");
   await page.keyboard.press("Escape");
 
   await page.getByRole("combobox", { name: "Tài khoản", exact: true }).click();
@@ -141,7 +143,7 @@ test("quản lý tài khoản và gán tài khoản cho giao dịch", async ({ p
 
   await page.getByRole("combobox", { name: "Tài khoản trong lịch sử" }).click();
   await page.getByRole("option", { name: "VCB kiểm thử", exact: true }).click();
-  await expect(page.getByText("Hiển thị 1/1 khoản")).toBeVisible();
+  await expect(page.getByText("Có 1 khoản · 1–1")).toBeVisible();
 
   await page.getByRole("link", { name: "Thống kê" }).click();
   await expect(page.getByRole("heading", { name: /Chi tiêu theo tài khoản — Năm \d{4}/ })).toBeVisible();

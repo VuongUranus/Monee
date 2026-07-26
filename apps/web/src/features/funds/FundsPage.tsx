@@ -1,12 +1,23 @@
-import { useState } from "react";
-import type { CryptoMatch, Fund, FundCategory, FundDetail, GoldDetail, GoldLot, HoldingDetail, HoldingLot, SharedFundRole } from "@chi-tieu/shared";
+import { useCallback, useEffect, useState } from "react";
+import type {
+  CryptoMatch,
+  Fund,
+  FundCategory,
+  FundDetail,
+  GoldDetail,
+  GoldLot,
+  HoldingDetail,
+  HoldingLot,
+  SharedFundContributionsResponse,
+  SharedFundMembersResponse,
+  SharedFundRole,
+} from "@chi-tieu/shared";
 import { api } from "@/lib/api";
 import { DonutChart } from "@/components/Charts";
 import { Modal } from "@/components/Modal";
 import { MoneyInput } from "@/components/MoneyInput";
 import { Select } from "@/components/Select";
 import {
-  allTimeFund,
   cryptoQuote,
   currentLotPriceVnd,
   fmt,
@@ -16,27 +27,26 @@ import {
   goldLotCostVnd,
   goldLotPriceVnd,
   holdingCostVnd,
-  mergeMarketResponse,
   getGoal,
   MONTHS_FULL,
   PALETTE,
   slugId,
-  totalFundsForMonth,
-  totalIncomeForMonth,
-  yearToDateFund,
-  years,
 } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
 
 export function FundsPage() {
   const ledger = useFinanceStore((state) => state.ledger);
+  const fundOverview = useFinanceStore((state) => state.fundOverview);
+  const loadFunds = useFinanceStore((state) => state.loadFunds);
+  const loadFundDetail = useFinanceStore((state) => state.loadFundDetail);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
   const marketState = useFinanceStore((state) => state.marketState);
   const marketMessage = useFinanceStore((state) => state.marketMessage);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
   const refreshMarket = useFinanceStore((state) => state.refreshMarket);
-  const sharedFunds = useFinanceStore((state) => state.sharedFunds);
   const [scope, setScope] = useState<"year" | "all">("year");
   const [managing, setManaging] = useState(false);
   const [detailFundId, setDetailFundId] = useState<string | null>(null);
@@ -44,35 +54,44 @@ export function FundsPage() {
   const [contributionFundId, setContributionFundId] = useState<string | null>(null);
   const contributionMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
 
-  const yearData = ledger.years[String(year)]!;
-  const income = totalIncomeForMonth(ledger, year, month);
-  const total = totalFundsForMonth(ledger, year, month);
-  const totalYtd = ledger.funds.reduce((sum, fund) => sum + yearToDateFund(ledger, year, fund.id), 0);
-  const scopeYears = scope === "all" ? years(ledger) : [year];
-  let scopeTotal = 0;
-  let scopeMonths = 0;
-  for (const targetYear of scopeYears) {
-    for (let targetMonth = 0; targetMonth < 12; targetMonth += 1) {
-      const amount = totalFundsForMonth(ledger, targetYear, targetMonth);
-      scopeTotal += amount;
-      if (amount > 0) scopeMonths += 1;
-    }
-  }
-  const accumulatedAssets = years(ledger).reduce((sum, item) =>
-    sum + ledger.funds.reduce((fundSum, fund) => fundSum + yearToDateFund(ledger, item, fund.id), 0), 0);
+  useEffect(() => {
+    void loadFunds();
+  }, [loadFunds, month, year]);
+
+  const yearData = ledger.years[String(year)] ?? {
+    income: new Array<number>(12).fill(0),
+    funds: {},
+    details: {},
+    notes: new Array<string>(12).fill(""),
+  };
+  const income = fundOverview?.income ?? 0;
+  const total = fundOverview?.funds.reduce((sum, fund) => sum + fund.monthAmount, 0) ?? 0;
+  const totalYtd = fundOverview?.funds.reduce((sum, fund) => sum + fund.yearTotal, 0) ?? 0;
+  const scopeTotal = fundOverview?.funds.reduce((sum, fund) =>
+    sum + (scope === "all" ? fund.allTimeTotal : fund.yearTotal), 0) ?? 0;
+  const scopeMonths = scope === "all"
+    ? fundOverview?.allTimeActiveMonths ?? 0
+    : fundOverview?.yearActiveMonths ?? 0;
+  const accumulatedAssets = fundOverview?.funds.reduce((sum, fund) => sum + fund.allTimeTotal, 0) ?? 0;
   const openingAssets = ledger.funds.reduce((sum, fund) => sum + (ledger.financialProfile.openingBalances[fund.id] ?? 0), 0);
   const assets = accumulatedAssets + openingAssets;
   const debt = ledger.financialProfile.debt.balance;
 
   const resetMonth = (): void => {
     if (!window.confirm(`Xóa toàn bộ phân bổ quỹ và ghi chú của ${MONTHS_FULL[month]} / ${year}?`)) return;
-    updateLedger((draft) => {
+    mutateLedger((draft) => {
       const target = draft.years[String(year)]!;
       for (const fund of draft.funds.filter((item) => item.sharing?.role !== "viewer")) {
         target.funds[fund.id]![month] = 0;
         target.details[fund.id]![month] = null;
       }
       target.notes[month] = "";
+    }, async (expectedRevision) => {
+      for (const fund of ledger.funds.filter((item) => item.sharing && item.sharing.role !== "viewer")) {
+        const shared = useFinanceStore.getState().sharedFunds[fund.id];
+        if (shared) await api.updateSharedFundMonth(fund.id, year, month + 1, shared.revision, { amount: 0, detail: null });
+      }
+      return api.resetMonth(year, month + 1, expectedRevision);
     });
   };
 
@@ -127,8 +146,9 @@ export function FundsPage() {
                 {ledger.funds.map((fund) => {
                   const value = yearData.funds[fund.id]?.[month] ?? 0;
                   const category = fundCategory(fund);
-                  const contributions = sharedFunds[fund.id]?.content.contributions?.[contributionMonth] ?? [];
-                  const contributed = contributions.reduce((sum, item) => sum + item.amount, 0);
+                  const overview = fundOverview?.funds.find((item) => item.id === fund.id);
+                  const contributed = overview?.contributionAmount ?? 0;
+                  const contributionCount = overview?.contributionCount ?? 0;
                   return (
                     <tr key={fund.id}>
                       <td><span className="fund-tag" style={{ background: fund.color }} />{fund.name}<small className="table-meta">{FUND_CATEGORIES[category].short}</small></td>
@@ -137,19 +157,30 @@ export function FundsPage() {
                           <MoneyInput
                             value={value}
                             ariaLabel={`Số tiền ${fund.name}`}
-                            onCommit={(amount) => updateLedger((draft) => {
-                              draft.years[String(year)]!.funds[fund.id]![month] = amount;
-                            })}
+                            onCommit={(amount) => {
+                              const mutate = (draft: any): void => { draft.years[String(year)]!.funds[fund.id]![month] = amount; };
+                              if (fund.sharing) {
+                                void mutateSharedLedger(fund.id, mutate, (revision) =>
+                                  api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount }))
+                                  .catch(() => undefined);
+                              } else {
+                                mutateLedger(mutate, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount }, expectedRevision));
+                              }
+                            }}
                           />
                         ) : category === "saving" ? <strong>{fmt(value)}</strong> : (
-                          <button className="computed-button" type="button" onClick={() => setDetailFundId(fund.id)}>
+                          <button className="computed-button" type="button" onClick={() => {
+                            void loadFundDetail(fund.id).then((detail) => {
+                              if (detail) setDetailFundId(fund.id);
+                            });
+                          }}>
                             <strong>{fmt(value)}</strong><small>Chỉnh chi tiết</small>
                           </button>
                         )}
                       </td>
-                      <td>{fund.sharing ? <button className="computed-button" type="button" onClick={() => setContributionFundId(fund.id)}><strong>{fmt(contributed)}</strong><small>{contributions.length ? `${contributions.length} khoản` : "Ghi nhận"}</small></button> : "—"}</td>
+                      <td>{fund.sharing ? <button className="computed-button" type="button" onClick={() => setContributionFundId(fund.id)}><strong>{fmt(contributed)}</strong><small>{contributionCount ? `${contributionCount} khoản` : "Ghi nhận"}</small></button> : "—"}</td>
                       <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
-                      <td>{fmt(yearToDateFund(ledger, year, fund.id))}</td>
+                      <td>{fmt(fundOverview?.funds.find((item) => item.id === fund.id)?.yearTotal ?? 0)}</td>
                     </tr>
                   );
                 })}
@@ -165,8 +196,11 @@ export function FundsPage() {
               placeholder="Ví dụ: thưởng Tết, rút crypto…"
               onChange={(event) => updateLedger((draft) => {
                 draft.years[String(year)]!.notes[month] = event.target.value;
-              }, false)}
-              onBlur={() => updateLedger(() => undefined)}
+              })}
+              onBlur={() => mutateLedger(
+                () => undefined,
+                (expectedRevision) => api.updateMonthNote(year, month + 1, useFinanceStore.getState().ledger.years[String(year)]!.notes[month] ?? "", expectedRevision),
+              )}
             />
           </label>
         </article>
@@ -204,7 +238,10 @@ export function FundsPage() {
           <input
             type="checkbox"
             checked={ledger.showGoals}
-            onChange={(event) => updateLedger((draft) => { draft.showGoals = event.target.checked; })}
+            onChange={(event) => {
+              const showGoals = event.target.checked;
+              mutateLedger((draft) => { draft.showGoals = showGoals; }, (expectedRevision) => api.updatePreferences(expectedRevision, { showGoals }));
+            }}
           />
           Hiện mục tiêu
         </label>
@@ -231,15 +268,25 @@ function Stat({ label, value, meta, accent }: { label: string; value: string; me
 
 function GoalsTable() {
   const ledger = useFinanceStore((state) => state.ledger);
+  const fundOverview = useFinanceStore((state) => state.fundOverview);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
-  const updateLedger = useFinanceStore((state) => state.updateLedger);
-  const totals = ledger.funds.reduce((result, fund) => {
-    const goal = ledger.goals[fund.id] ?? { years: {}, all: 0 };
-    result.yearGoal += goal.years[String(year)] ?? 0;
-    result.allGoal += goal.all;
-    result.ytd += yearToDateFund(ledger, year, fund.id);
-    result.all += allTimeFund(ledger, fund.id);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
+  const saveGoal = (fund: Fund, goalYear: number | null, value: number, recipe: (draft: any) => void): void => {
+    if (fund.sharing) {
+      void mutateSharedLedger(fund.id, recipe, (revision) =>
+        api.updateSharedFundGoal(fund.id, revision, goalYear, value))
+        .catch(() => undefined);
+    } else {
+      mutateLedger(recipe, (expectedRevision) => api.updateFundGoal(fund.id, goalYear, value, expectedRevision));
+    }
+  };
+  const totals = (fundOverview?.funds ?? []).reduce((result, fund) => {
+    result.yearGoal += fund.yearGoal;
+    result.allGoal += fund.allGoal;
+    result.ytd += fund.yearTotal;
+    result.all += fund.allTimeTotal;
     return result;
   }, { yearGoal: 0, allGoal: 0, ytd: 0, all: 0 });
 
@@ -250,16 +297,18 @@ function GoalsTable() {
           <thead><tr><th>Quỹ</th><th>Mục tiêu {year}</th><th>Đã tích lũy</th><th>Tiến độ</th><th>Cần/tháng</th><th>Mục tiêu toàn bộ</th><th>Tích lũy toàn bộ</th><th>Tiến độ</th></tr></thead>
           <tbody>
             {ledger.funds.map((fund) => {
+              const overview = fundOverview?.funds.find((item) => item.id === fund.id);
               const goal = ledger.goals[fund.id] ?? { years: {}, all: 0 };
-              const yearGoal = goal.years[String(year)] ?? 0;
-              const ytd = yearToDateFund(ledger, year, fund.id);
-              const all = allTimeFund(ledger, fund.id);
+              const yearGoal = overview?.yearGoal ?? goal.years[String(year)] ?? 0;
+              const allGoal = overview?.allGoal ?? goal.all;
+              const ytd = overview?.yearTotal ?? 0;
+              const all = overview?.allTimeTotal ?? 0;
               const remaining = Math.max(0, yearGoal - ytd);
               const need = remaining > 0 ? Math.ceil(remaining / (12 - month)) : 0;
               return (
                 <tr key={fund.id}>
                   <td><span className="fund-tag" style={{ background: fund.color }} />{fund.name}</td>
-                  <td>{fund.sharing?.role === "viewer" ? (yearGoal ? fmt(yearGoal) : "—") : <MoneyInput value={yearGoal} onCommit={(value) => updateLedger((draft) => {
+                  <td>{fund.sharing?.role === "viewer" ? (yearGoal ? fmt(yearGoal) : "—") : <MoneyInput value={yearGoal} onCommit={(value) => saveGoal(fund, year, value, (draft) => {
                     const target = getGoal(draft as any, fund.id);
                     if (value > 0) target.years[String(year)] = value;
                     else delete target.years[String(year)];
@@ -267,9 +316,9 @@ function GoalsTable() {
                   <td>{fmt(ytd)}</td>
                   <td><Progress value={ytd} goal={yearGoal} color={fund.color} /></td>
                   <td className="need-cell">{yearGoal ? (remaining ? <>{fmt(need)}<small>còn thiếu {fmtShort(remaining)}</small></> : <span className="ok">✓ đã đạt</span>) : <span className="goal-cell">chưa đặt</span>}</td>
-                  <td>{fund.sharing?.role === "viewer" ? (goal.all ? fmt(goal.all) : "—") : <MoneyInput value={goal.all} onCommit={(value) => updateLedger((draft) => { getGoal(draft as any, fund.id).all = value; })} />}</td>
+                  <td>{fund.sharing?.role === "viewer" ? (allGoal ? fmt(allGoal) : "—") : <MoneyInput value={allGoal} onCommit={(value) => saveGoal(fund, null, value, (draft) => { getGoal(draft as any, fund.id).all = value; })} />}</td>
                   <td>{fmt(all)}</td>
-                  <td><Progress value={all} goal={goal.all} color={fund.color} /></td>
+                  <td><Progress value={all} goal={allGoal} color={fund.color} /></td>
                 </tr>
               );
             })}
@@ -297,7 +346,9 @@ function Progress({ value, goal, color }: { value: number; goal: number; color: 
 function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: string): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
-  const bootstrap = useFinanceStore((state) => state.bootstrap);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
+  const deleteSharedFund = useFinanceStore((state) => state.deleteSharedFund);
   const [name, setName] = useState("");
   const [color, setColor] = useState(PALETTE[0]!);
   const [category, setCategory] = useState<FundCategory>("saving");
@@ -305,7 +356,7 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
   const add = (): void => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    updateLedger((draft) => {
+    mutateLedger((draft) => {
       let id = slugId(trimmed);
       let suffix = 2;
       while (draft.funds.some((fund) => fund.id === id)) id = `${slugId(trimmed)}-${suffix++}`;
@@ -316,7 +367,7 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
       }
       draft.financialProfile.fundPlan[id] = 0;
       draft.financialProfile.openingBalances[id] = 0;
-    });
+    }, (expectedRevision) => api.createFund({ name: trimmed, color, category }, expectedRevision));
     setName("");
   };
 
@@ -324,11 +375,14 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
     if (ledger.funds.length <= 1 || !window.confirm(`Xóa quỹ “${fund.name}” cùng toàn bộ dữ liệu của quỹ?`)) return;
     if (fund.sharing) {
       if (fund.sharing.role !== "owner") return;
-      await api.deleteSharedFund(fund.id);
-      await bootstrap();
+      try {
+        await deleteSharedFund(fund.id);
+      } catch {
+        // The store reloads the fund overview and surfaces the error status.
+      }
       return;
     }
-    updateLedger((draft) => {
+    mutateLedger((draft) => {
       draft.funds = draft.funds.filter((item) => item.id !== fund.id);
       for (const data of Object.values(draft.years)) {
         delete data.funds[fund.id];
@@ -337,16 +391,31 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
       delete draft.goals[fund.id];
       delete draft.financialProfile.fundPlan[fund.id];
       delete draft.financialProfile.openingBalances[fund.id];
-    });
+    }, (expectedRevision) => api.deleteFund(fund.id, expectedRevision));
   };
 
   const move = (index: number, direction: number): void => {
     const target = index + direction;
     if (target < 0 || target >= ledger.funds.length) return;
-    updateLedger((draft) => {
+    if (ledger.funds[index]?.sharing) return;
+    const ids = ledger.funds.filter((fund) => !fund.sharing).map((fund) => fund.id);
+    const privateIndex = ids.indexOf(ledger.funds[index]!.id);
+    const privateTarget = privateIndex + direction;
+    if (privateIndex < 0 || privateTarget < 0 || privateTarget >= ids.length) return;
+    [ids[privateIndex], ids[privateTarget]] = [ids[privateTarget]!, ids[privateIndex]!];
+    mutateLedger((draft) => {
       const [fund] = draft.funds.splice(index, 1);
       if (fund) draft.funds.splice(target, 0, fund);
-    });
+    }, (expectedRevision) => api.reorderFunds(ids, expectedRevision));
+  };
+
+  const updateFund = (fund: Fund, patch: Record<string, unknown>, recipe: (draft: any) => void): void => {
+    if (fund.sharing) {
+      void mutateSharedLedger(fund.id, recipe, (revision) => api.updateSharedFund(fund.id, revision, patch))
+        .catch(() => undefined);
+    } else {
+      mutateLedger(recipe, (expectedRevision) => api.updateFund(fund.id, patch, expectedRevision));
+    }
   };
 
   return (
@@ -355,15 +424,21 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
         {ledger.funds.map((fund, index) => (
           <div className="manager-row" key={fund.id}>
             <div className="reorder-actions">
-              <button type="button" aria-label={`Đưa ${fund.name} lên`} disabled={index === 0 || fund.sharing?.role === "viewer"} onClick={() => move(index, -1)}>↑</button>
-              <button type="button" aria-label={`Đưa ${fund.name} xuống`} disabled={index === ledger.funds.length - 1 || fund.sharing?.role === "viewer"} onClick={() => move(index, 1)}>↓</button>
+              <button type="button" aria-label={`Đưa ${fund.name} lên`} disabled={index === 0 || Boolean(fund.sharing)} onClick={() => move(index, -1)}>↑</button>
+              <button type="button" aria-label={`Đưa ${fund.name} xuống`} disabled={index === ledger.funds.length - 1 || Boolean(fund.sharing)} onClick={() => move(index, 1)}>↓</button>
             </div>
-            <input disabled={fund.sharing?.role === "viewer"} type="color" value={fund.color} aria-label={`Màu ${fund.name}`} onChange={(event) => updateLedger((draft) => { draft.funds[index]!.color = event.target.value; })} />
-            <input disabled={fund.sharing?.role === "viewer"} value={fund.name} aria-label={`Tên ${fund.name}`} onChange={(event) => updateLedger((draft) => { draft.funds[index]!.name = event.target.value; }, false)} onBlur={() => updateLedger(() => undefined)} />
+            <input disabled={fund.sharing?.role === "viewer"} type="color" value={fund.color} aria-label={`Màu ${fund.name}`} onChange={(event) => {
+              const next = event.target.value;
+              updateFund(fund, { color: next }, (draft) => { draft.funds[index]!.color = next; });
+            }} />
+            <input disabled={fund.sharing?.role === "viewer"} value={fund.name} aria-label={`Tên ${fund.name}`} onChange={(event) => updateLedger((draft) => { draft.funds[index]!.name = event.target.value; })} onBlur={(event) => {
+              const next = event.currentTarget.value.trim();
+              if (next) updateFund(fund, { name: next }, (draft) => { draft.funds[index]!.name = next; });
+            }} />
             <Select<FundCategory>
               value={fund.cat}
               options={Object.entries(FUND_CATEGORIES).map(([id, item]) => ({ value: id as FundCategory, label: item.short }))}
-              onValueChange={(cat) => { if (fund.sharing?.role !== "viewer") updateLedger((draft) => { draft.funds[index]!.cat = cat; }); }}
+              onValueChange={(cat) => { if (fund.sharing?.role !== "viewer") updateFund(fund, { category: cat }, (draft) => { draft.funds[index]!.cat = cat; }); }}
               ariaLabel={`Loại quỹ ${fund.name}`}
             />
             <small>{fund.sharing ? (fund.sharing.role === "owner" ? "Đang chia sẻ" : `Chia sẻ bởi ${fund.sharing.ownerName}`) : "Cá nhân"}</small>
@@ -390,23 +465,41 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
 function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const sharedFunds = useFinanceStore((state) => state.sharedFunds);
-  const bootstrap = useFinanceStore((state) => state.bootstrap);
+  const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
+  const shareFund = useFinanceStore((state) => state.shareFund);
   const fund = ledger.funds.find((item) => item.id === fundId)!;
   const shared = sharedFunds[fundId];
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<SharedFundRole>("viewer");
   const [message, setMessage] = useState("");
+  const [members, setMembers] = useState<SharedFundMembersResponse["members"]>([]);
+
+  const refreshMembers = useCallback(async (): Promise<void> => {
+    if (!shared) return;
+    try {
+      const response = await api.loadSharedFundMembers(fundId);
+      setMembers(response.members);
+    } catch {
+      setMessage("Không tải được danh sách thành viên.");
+    }
+  }, [fundId, shared]);
+
+  useEffect(() => {
+    void refreshMembers();
+  }, [refreshMembers]);
 
   const addMember = async (): Promise<void> => {
     if (!email.trim()) return;
     setMessage("Đang cập nhật…");
     try {
-      if (shared) await api.setSharedFundMember(fundId, email, role);
-      else await api.createSharedFund(fundId, email, role);
-      await bootstrap();
+      if (shared) {
+        await mutateSharedLedger(fundId, () => undefined, (revision) =>
+          api.setSharedFundMember(fundId, email, role, revision));
+      } else await shareFund(fundId, email, role);
       if (!shared) { onClose(); return; }
       setEmail("");
       setMessage("Đã cấp quyền truy cập.");
+      await refreshMembers();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Không thể cấp quyền.");
     }
@@ -415,9 +508,11 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
   const removeMember = async (memberId: string): Promise<void> => {
     if (!shared || !window.confirm("Thu hồi quyền của thành viên này?")) return;
     try {
-      await api.removeSharedFundMember(fundId, memberId);
-      await bootstrap();
+      await mutateSharedLedger(fundId, () => undefined, async (revision) => {
+        return api.removeSharedFundMember(fundId, memberId, revision);
+      });
       setMessage("Đã thu hồi quyền truy cập.");
+      await refreshMembers();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Không thể thu hồi quyền.");
     }
@@ -432,8 +527,8 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
         <button className="btn primary" type="button" disabled={!email.trim()} onClick={() => void addMember()}>{shared ? "Cấp quyền" : "Bắt đầu chia sẻ"}</button>
       </div>
       {message ? <p className="hint">{message}</p> : null}
-      {shared?.members?.length ? <div className="manager-list">
-        {shared.members.map((member) => <div className="manager-row" key={member.user.sub}>
+      {members.length ? <div className="manager-list">
+        {members.map((member) => <div className="manager-row" key={member.user.sub}>
           <span>{member.user.name || member.user.email}<small>{member.user.email}</small></span>
           <span>{member.role === "editor" ? "Chỉnh sửa" : "Chỉ xem"}</span>
           <button className="btn sm danger" type="button" onClick={() => void removeMember(member.user.sub)}>Thu hồi</button>
@@ -447,30 +542,45 @@ function ContributionModal({ fundId, month, onClose }: { fundId: string; month: 
   const ledger = useFinanceStore((state) => state.ledger);
   const user = useFinanceStore((state) => state.user);
   const sharedFunds = useFinanceStore((state) => state.sharedFunds);
-  const bootstrap = useFinanceStore((state) => state.bootstrap);
+  const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
   const fund = ledger.funds.find((item) => item.id === fundId)!;
   const shared = sharedFunds[fundId]!;
   const [amount, setAmount] = useState(0);
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
-  const entries = shared.content.contributions?.[month] ?? [];
+  const [contributions, setContributions] = useState<SharedFundContributionsResponse | null>(null);
+  const entries = contributions?.items ?? [];
   const canContribute = shared.role !== "viewer";
+  const [year, monthNumber] = month.split("-").map(Number) as [number, number];
+
+  const refreshContributions = useCallback(async (): Promise<void> => {
+    try {
+      setContributions(await api.loadSharedFundContributions(fundId, year, monthNumber));
+    } catch {
+      setMessage("Không tải được các khoản đóng góp.");
+    }
+  }, [fundId, monthNumber, year]);
+
+  useEffect(() => {
+    void refreshContributions();
+  }, [refreshContributions]);
 
   const add = async (): Promise<void> => {
     if (!(amount > 0)) return;
     try {
-      await api.addSharedFundContribution(fundId, month, amount, note);
-      await bootstrap();
+      await mutateSharedLedger(fundId, () => undefined, (revision) =>
+        api.addSharedFundContribution(fundId, month, amount, note, revision));
       setAmount(0);
       setNote("");
       setMessage("Đã ghi nhận khoản gửi của bạn.");
+      await refreshContributions();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Không thể ghi nhận khoản gửi."); }
   };
 
   return <Modal title={`Thành viên gửi vào ${fund.name} — ${month}`} onClose={onClose} footer={<button className="btn" type="button" onClick={onClose}>Đóng</button>}>
     <p className="hint">Tổng thành viên gửi: <b>{fmt(entries.reduce((sum, entry) => sum + entry.amount, 0))}</b></p>
     {entries.length ? <div className="manager-list">{entries.map((entry) => {
-      const profile = shared.contributors[entry.memberId];
+      const profile = contributions?.contributors[entry.memberId];
       return <div className="manager-row" key={entry.id}><span>{profile?.name || profile?.email || "Thành viên"}{entry.memberId === user?.sub ? " (bạn)" : ""}<small>{new Date(entry.createdAt).toLocaleString("vi-VN")}{entry.note ? ` · ${entry.note}` : ""}</small></span><strong>{fmt(entry.amount)}</strong></div>;
     })}</div> : <p className="hint">Chưa có khoản gửi nào trong tháng này.</p>}
     {canContribute ? <div className="manager-add"><MoneyInput value={amount} allowZero={false} ariaLabel="Số tiền gửi vào quỹ" onCommit={setAmount} /><input value={note} placeholder="Ghi chú (không bắt buộc)" aria-label="Ghi chú khoản gửi" onChange={(event) => setNote(event.target.value)} /><button className="btn primary" type="button" disabled={!amount} onClick={() => void add()}>+ Ghi nhận tiền gửi</button></div> : <p className="hint">Bạn có quyền xem nên không thể ghi nhận khoản gửi.</p>}
@@ -482,7 +592,9 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   const ledger = useFinanceStore((state) => state.ledger);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
-  const updateLedger = useFinanceStore((state) => state.updateLedger);
+  const persistMarketQuotes = useFinanceStore((state) => state.persistMarketQuotes);
+  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
   const fund = ledger.funds.find((item) => item.id === fundId)!;
   const readOnly = fund.sharing?.role === "viewer";
   const category = fundCategory(fund);
@@ -507,21 +619,35 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   const defaultGoldLot = (): GoldLot => ({ chi: 0, manualPrice: null, purchasePrice: null, feeVnd: null });
 
   const save = (): void => {
-    updateLedger((draft) => {
+    let savedAmount = 0;
+    let savedDetail: FundDetail = null;
+    const recipe = (draft: any): void => {
       const target = draft.years[String(year)]!;
       if (detail?.type === "gold") {
         const lots = detail.lots.filter((lot) => lot.chi > 0 || lot.purchasePrice || lot.manualPrice || lot.feeVnd || lot.note?.trim());
         const next: GoldDetail = { type: "gold", lots: structuredClone(lots) };
         target.details[fundId]![month] = next;
         target.funds[fundId]![month] = Math.round(lots.reduce((sum, lot) => sum + lot.chi * goldLotPriceVnd(draft as any, lot), 0));
+        savedDetail = next;
+        savedAmount = target.funds[fundId]![month];
       } else if (detail?.type === "hold") {
         const lots = detail.lots.filter((lot) => lot.ticker.trim() || lot.qty > 0 || lot.purchasePrice || lot.manualPrice || lot.feeVnd || lot.note?.trim());
         const next: HoldingDetail = { type: "hold", lots: structuredClone(lots) };
         target.details[fundId]![month] = next;
         const value = lots.reduce((sum, lot) => sum + lot.qty * currentLotPriceVnd(draft as any, lot, category), 0);
         target.funds[fundId]![month] = Math.round(value);
+        savedDetail = next;
+        savedAmount = target.funds[fundId]![month];
       }
-    });
+    };
+    if (fund.sharing) {
+      void mutateSharedLedger(fund.id, recipe, (revision) =>
+        api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount: savedAmount, detail: savedDetail }))
+        .catch(() => undefined);
+    } else {
+      recipe(structuredClone(ledger));
+      mutateLedger(recipe, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount: savedAmount, detail: savedDetail }, expectedRevision));
+    }
     onClose();
   };
 
@@ -547,8 +673,10 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
     }
     setLookupMessage((current) => ({ ...current, [index]: "Đang tra cứu CoinPaprika…" }));
     try {
-      const response = await api.marketQuotes({ assets: [{ type: "crypto", symbol, ...(providerId ? { providerId } : {}) }] });
-      updateLedger((draft) => { mergeMarketResponse(draft as any, response); }, false);
+      const persisted = await persistMarketQuotes({
+        assets: [{ type: "crypto", symbol, ...(providerId ? { providerId } : {}) }],
+      });
+      const response = persisted.quotes;
       const quote = response.crypto[0];
       if (quote) {
         updateLot(index, { ticker: quote.symbol, providerId: quote.providerId });
