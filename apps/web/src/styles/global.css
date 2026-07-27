@@ -46,6 +46,17 @@ code { font-size: .9em; }
   background: #fff2cc;
   border-bottom: 4px solid #f4cccc;
 }
+.masthead-brand { display: flex; min-width: 0; align-items: center; gap: 18px; }
+.site-logo, .brand-mark {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: cover;
+  object-position: center;
+  border: 2px solid #f4cccc;
+  border-radius: 50%;
+  background: #fce8ef;
+}
+.site-logo { width: 76px; height: 76px; }
 .masthead h1 { margin: 3px 0 6px; color: #a64d79; font: 600 clamp(28px, 4vw, 43px)/1.08 var(--font-display); }
 .masthead .sub { max-width: 780px; margin: 0; color: #797877; line-height: 1.5; }
 .eyebrow { margin: 0; color: var(--gold); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; font-weight: 800; }
@@ -414,7 +425,7 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 .auth-card h1 { margin: 8px 0 12px; color: var(--accent); font: 600 36px/1.1 var(--font-display); }
 .auth-card p:not(.eyebrow) { margin: 0 auto 22px; color: var(--muted); line-height: 1.55; }
 .auth-card .btn.primary { min-width: 220px; }
-.brand-mark { display: grid; width: 58px; height: 58px; margin: 0 auto 24px; place-items: center; color: #fff; background: var(--accent); border-radius: 16px; box-shadow: 0 0 0 8px var(--accent-soft); font: 700 29px var(--font-display); }
+.brand-mark { width: 72px; height: 72px; margin: 0 auto 24px; box-shadow: 0 0 0 8px var(--accent-soft); }
 .auth-progress { width: min(280px, 100%); height: 10px; margin: 4px auto 0; overflow: hidden; background: var(--accent-soft); border: 1px solid var(--line); border-radius: 999px; box-shadow: 0 1px 2px rgb(166 77 121 / 10%) inset; }
 .auth-progress span { display: block; width: 42%; height: 100%; background: linear-gradient(90deg, #f4cccc, var(--accent), #f4cccc); border-radius: inherit; animation: auth-progress 1.25s ease-in-out infinite; }
 @keyframes auth-progress { from { transform: translateX(-110%); } to { transform: translateX(250%); } }
@@ -461,6 +472,8 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 }
 
 @media (max-width: 520px) {
+  .masthead-brand { align-items: flex-start; gap: 12px; }
+  .site-logo { width: 58px; height: 58px; }
   .masthead h1 { font-size: 31px; }
   .stat-row, .stat-row-5, .stat-row-6 { grid-template-columns: 1fr; }
   .debt-numbers, .schedule-row { grid-template-columns: 1fr; }

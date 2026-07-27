@@ -105,10 +105,13 @@ export function AppShell({ children }: PropsWithChildren) {
   return (
     <>
       <header className="masthead">
-        <div>
-          <p className="eyebrow">Sổ tài chính cá nhân</p>
-          <h1>{copy.title}</h1>
-          <p className="sub">{copy.subtitle}</p>
+        <div className="masthead-brand">
+          <img className="site-logo" src="/logo.png" alt="Logo Sổ tài chính cá nhân" />
+          <div>
+            <p className="eyebrow">Sổ tài chính cá nhân</p>
+            <h1>{copy.title}</h1>
+            <p className="sub">{copy.subtitle}</p>
+          </div>
         </div>
         <div className="account-menu">
           {user?.picture ? <img className="account-avatar" src={user.picture} alt="" /> : null}

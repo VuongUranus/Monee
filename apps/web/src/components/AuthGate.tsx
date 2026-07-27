@@ -9,7 +9,7 @@ export function AuthGate() {
   return (
     <main className="auth-gate" aria-live="polite">
       <div className="auth-card">
-        <div className="brand-mark" aria-hidden="true">₫</div>
+        <img className="brand-mark" src="/logo.png" alt="Logo Sổ tài chính cá nhân" />
         <p className="eyebrow">Tài chính cá nhân</p>
         <h1>{checking ? "Đang kiểm tra đăng nhập…" : "Theo dõi quỹ và chi tiêu"}</h1>
         <p>{checking ? "Đang tải dữ liệu của bạn…" : "Dữ liệu của mỗi tài khoản được lưu riêng tư và an toàn."}</p>
