@@ -395,6 +395,9 @@ export interface FinanceBootstrapResponse {
   workspaceRevision: number;
   preferences: FinancePreferences;
   availableYears: number[];
+  features: {
+    aiAssistant: boolean;
+  };
 }
 
 export interface PersonalMutationResponse<T> {
@@ -455,6 +458,77 @@ export interface TransactionPageResponse {
   pageSize: number;
   pageCount: number;
 }
+
+export interface AssistantHistoryTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export interface AssistantContext {
+  route: "expenses" | "funds" | "statistics" | "debts";
+  selectedYear: number;
+  /** Calendar month, 1..12. */
+  selectedMonth: number;
+}
+
+export interface AssistantEvidence {
+  source: "profile" | "transactions" | "statistics" | "funds" | "debts";
+  label: string;
+}
+
+interface AssistantProposalBase {
+  actionId: string;
+  expectedRevision: number;
+  confirmationToken: string;
+  expiresAt: string;
+}
+
+export interface AssistantTransactionProposal extends AssistantProposalBase {
+  kind: "create_transaction";
+  transaction: Transaction;
+  categoryName: string;
+  accountName?: string;
+}
+
+export interface AssistantFundProposal extends AssistantProposalBase {
+  kind: "allocate_fund";
+  fundId: string;
+  fundName: string;
+  year: number;
+  month: number;
+  operation: "increment" | "set";
+  amount: number;
+  previousAmount: number;
+  nextAmount: number;
+}
+
+export type AssistantProposal = AssistantTransactionProposal | AssistantFundProposal;
+
+export interface AssistantMessageRequest {
+  message: string;
+  history: AssistantHistoryTurn[];
+  context: AssistantContext;
+}
+
+export interface AssistantMessageResponse {
+  reply: string;
+  evidence: AssistantEvidence[];
+  proposal?: AssistantProposal;
+}
+
+export type AssistantConfirmResponse =
+  | {
+    kind: "create_transaction";
+    transaction: Transaction;
+    workspaceRevision: number;
+    alreadyApplied: boolean;
+  }
+  | {
+    kind: "allocate_fund";
+    fund: FundMonthDetailResponse;
+    workspaceRevision: number;
+    alreadyApplied: boolean;
+  };
 
 /** Current expense screen data that must be returned after a transaction mutation. */
 export interface ExpenseTransactionView {

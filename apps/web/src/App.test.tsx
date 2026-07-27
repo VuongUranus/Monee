@@ -139,6 +139,7 @@ function bootstrapResponse(ledger: FinanceStore, workspaceRevision: number) {
   return {
     user: { sub: "1", email: "test@example.com", name: "Người dùng", picture: "" },
     workspaceRevision,
+    features: { aiAssistant: false },
     preferences: {
       showGoals: ledger.showGoals,
       onboarding: ledger.onboarding,
@@ -344,11 +345,14 @@ describe("App", () => {
     expect(screen.getByRole("combobox", { name: "Đến tháng" })).toBeVisible();
   });
 
-  it("hiển thị chi tiêu theo tài khoản trên trang chi tiêu", async () => {
+  it("chuyển biểu đồ chi tiêu bằng tab trên trang chi tiêu", async () => {
     vi.stubGlobal("fetch", authenticatedFetch(200, (ledger) => {
       ledger.expense.txns.push({ id: "cash-expense", date: "2026-07-01", type: "expense", cat: "food", accountId: "cash", amount: 250_000, note: "Trưa" });
     }));
     render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    const accountTab = await screen.findByRole("tab", { name: "Theo tài khoản" }, { timeout: 5_000 });
+    expect(screen.queryByRole("heading", { name: "Chi tiêu theo tài khoản" })).not.toBeInTheDocument();
+    fireEvent.click(accountTab);
     expect(await screen.findByRole("heading", { name: "Chi tiêu theo tài khoản" }, { timeout: 5_000 })).toBeVisible();
     expect(screen.getAllByText("Tiền mặt").length).toBeGreaterThan(0);
   });

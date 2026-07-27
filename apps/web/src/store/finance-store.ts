@@ -1,4 +1,5 @@
 import type {
+  AssistantConfirmResponse,
   ExpenseConfigResponse,
   ExpenseMonthSummaryResponse,
   ExpenseTransactionView,
@@ -98,6 +99,8 @@ interface FinanceState {
     request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
   ): void;
   createTransaction(transaction: Transaction): void;
+  applyAssistantConfirmation(response: AssistantConfirmResponse): Promise<void>;
+  reloadAfterAssistantConflict(): Promise<void>;
   updateTransaction(transaction: Transaction): void;
   deleteTransaction(id: string): void;
   mutateSharedLedger<T>(
@@ -744,6 +747,38 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       persistTransaction((draft) => {
         draft.expense.txns.push(transaction);
       }, (expenseView, expectedRevision) => api.createTransaction(transaction, expenseView, expectedRevision));
+    },
+
+    async applyAssistantConfirmation(response) {
+      const transactionQueryBefore = get().transactionQuery;
+      set((state) => {
+        state.workspaceRevision = response.workspaceRevision;
+        if (state.bootstrapData) state.bootstrapData.workspaceRevision = response.workspaceRevision;
+        state.statistics = null;
+        if (response.kind === "create_transaction") {
+          state.expenseSummary = null;
+          state.transactionPage = null;
+          state.transactionQuery = null;
+        } else {
+          state.fundOverview = null;
+          state.fundDetails = {};
+          const year = state.ledger.years[String(response.fund.year)];
+          if (year?.funds[response.fund.fundId]) {
+            year.funds[response.fund.fundId]![response.fund.month - 1] = response.fund.amount;
+          }
+        }
+        state.saveState = "saved";
+        state.saveMessage = response.alreadyApplied ? "Thao tác đã được ghi trước đó." : "Đã lưu từ trợ lý.";
+      });
+      if (response.kind === "create_transaction" && location.pathname === "/expenses") {
+        await get().loadExpenses(transactionQueryBefore ?? {});
+      } else if (response.kind === "allocate_fund" && location.pathname === "/funds") {
+        await get().loadFunds(true);
+      }
+    },
+
+    async reloadAfterAssistantConflict() {
+      await reloadAfterConflict();
     },
 
     updateTransaction(transaction) {

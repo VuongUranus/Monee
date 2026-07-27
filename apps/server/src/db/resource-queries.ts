@@ -82,6 +82,7 @@ export async function readBootstrap(db: Executor, userId: string): Promise<Finan
   return {
     user: { sub: user.id, email: user.email, name: user.name, picture: user.picture },
     workspaceRevision: user.workspaceRevision,
+    features: { aiAssistant: false },
     preferences: {
       showGoals: settings?.showGoals ?? false,
       onboarding: {
@@ -262,6 +263,34 @@ export async function readTransactions(
     page,
     pageSize,
     pageCount: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+export async function readTransactionById(
+  db: Executor,
+  userId: string,
+  externalId: string,
+): Promise<Transaction | null> {
+  const [row] = await db.select({
+    transaction: schema.transactions,
+    categoryExternalId: schema.financeCategories.externalId,
+    accountExternalId: schema.accounts.externalId,
+  }).from(schema.transactions)
+    .innerJoin(schema.financeCategories, eq(schema.transactions.categoryId, schema.financeCategories.id))
+    .leftJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
+    .where(and(
+      eq(schema.transactions.userId, userId),
+      eq(schema.transactions.externalId, externalId),
+    ));
+  if (!row) return null;
+  return {
+    id: row.transaction.externalId,
+    date: row.transaction.date,
+    type: row.transaction.type as Transaction["type"],
+    cat: row.categoryExternalId,
+    ...(row.accountExternalId ? { accountId: row.accountExternalId } : {}),
+    amount: row.transaction.amount,
+    note: row.transaction.note,
   };
 }
 

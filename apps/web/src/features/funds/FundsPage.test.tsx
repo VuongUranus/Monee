@@ -59,13 +59,13 @@ describe("FundsPage", () => {
 
     const totalRow = screen.getAllByText("Tổng cộng")[0]?.closest("tr");
     expect(totalRow).not.toBeNull();
-    expect(within(totalRow!).getAllByText("3.000.000 ₫")).toHaveLength(2);
-    expect(within(totalRow!).queryByText("2.500.000 ₫")).not.toBeInTheDocument();
+    expect(within(totalRow!).getAllByText("3,000,000đ")).toHaveLength(2);
+    expect(within(totalRow!).queryByText("2,500,000đ")).not.toBeInTheDocument();
 
     const goalsCard = screen.getByText("Tích lũy toàn bộ").closest("article");
     expect(goalsCard).not.toBeNull();
-    expect(within(goalsCard!).getAllByText("3.000.000 ₫")).toHaveLength(4);
-    expect(within(goalsCard!).queryByText("2.500.000 ₫")).not.toBeInTheDocument();
+    expect(within(goalsCard!).getAllByText("3,000,000đ")).toHaveLength(4);
+    expect(within(goalsCard!).queryByText("2,500,000đ")).not.toBeInTheDocument();
   });
 
   it("chỉ tải overview một lần khi đổi kỳ đã tồn tại", async () => {
@@ -76,6 +76,7 @@ describe("FundsPage", () => {
         user: { sub: "test", name: "Test", email: "test@example.com", picture: "" },
         workspaceRevision: 1,
         availableYears: [2026],
+        features: { aiAssistant: false },
         preferences: {
           showGoals: true,
           onboarding: { status: "completed", version: 1 },

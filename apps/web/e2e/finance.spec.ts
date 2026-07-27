@@ -47,7 +47,7 @@ test("phân bổ quỹ, chi tiết tài sản và sao lưu", async ({ page }, te
   const saving = savingRow.getByRole("textbox");
   await saving.fill("1000000");
   await saving.blur();
-  await expect(savingRow).toContainText("1.000.000 ₫");
+  await expect(savingRow).toContainText("1,000,000đ");
 
   const goldRow = page.locator("tr").filter({ hasText: "Quỹ mua vàng" });
   await goldRow.getByRole("button", { name: /Chỉnh chi tiết/ }).click();
@@ -64,7 +64,7 @@ test("phân bổ quỹ, chi tiết tài sản và sao lưu", async ({ page }, te
   await goldDialog.getByRole("textbox", { name: "Giá mua vàng 1" }).blur();
   await goldDialog.getByRole("textbox", { name: "Ghi chú" }).nth(0).fill("Mua vàng kiểm thử");
   await goldDialog.getByRole("button", { name: "Lưu", exact: true }).click();
-  await expect(goldRow).toContainText("15.000.000 ₫");
+  await expect(goldRow).toContainText("15,000,000đ");
 
   await page.getByRole("button", { name: /Xuất sao lưu/ }).click();
   await expect(page.getByRole("dialog", { name: "Sao lưu dữ liệu" })).toBeVisible();
@@ -162,8 +162,8 @@ test("holdings cổ phiếu, crypto và biểu đồ mọi năm", async ({ page 
   await page.goto("/funds");
 
   const holdings = [
-    { fund: "Quỹ đầu tư", ticker: "VNM", quantity: "3", price: "100000", expected: "300.000 ₫" },
-    { fund: "Crypto", ticker: "BTC", quantity: "0.5", price: "2", expected: "25.000 ₫" },
+    { fund: "Quỹ đầu tư", ticker: "VNM", quantity: "3", price: "100000", expected: "300,000đ" },
+    { fund: "Crypto", ticker: "BTC", quantity: "0.5", price: "2", expected: "25,000đ" },
   ];
   for (const item of holdings) {
     const fundRow = page.locator("tr").filter({ hasText: item.fund });

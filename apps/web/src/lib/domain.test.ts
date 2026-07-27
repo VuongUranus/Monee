@@ -7,6 +7,8 @@ import {
   createDefaultStore,
   ensureYear,
   evaluateMoneyExpression,
+  fmt,
+  fmtNumber,
   goldLotCostVnd,
   goldLotPriceVnd,
   holdingCostVnd,
@@ -25,8 +27,14 @@ import {
 describe("nghiệp vụ sổ tài chính", () => {
   it("đánh giá biểu thức tiền an toàn", () => {
     expect(evaluateMoneyExpression("5000000 + 500000")).toBe(5_500_000);
-    expect(evaluateMoneyExpression("2*1.250.000")).toBe(2_500_000);
+    expect(evaluateMoneyExpression("2*1,250,000")).toBe(2_500_000);
+    expect(evaluateMoneyExpression("1,1")).toBe(1.1);
     expect(evaluateMoneyExpression("alert(1)")).toBeNaN();
+  });
+
+  it("hiển thị VND bằng dấu phẩy và hậu tố đ", () => {
+    expect(fmt(1_000_000)).toBe("1,000,000đ");
+    expect(fmtNumber(25_000)).toBe("25,000");
   });
 
   it("chuẩn hóa dữ liệu hiện hành và tạo đủ mảng 12 tháng", () => {

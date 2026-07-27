@@ -1,4 +1,7 @@
 import type {
+  AssistantConfirmResponse,
+  AssistantMessageRequest,
+  AssistantMessageResponse,
   AccountCreateRequest,
   Account,
   AccountType,
@@ -94,6 +97,16 @@ function request<T>(url: string, init?: RequestInit, fresh = false): Promise<T> 
 export const api = {
   me: (): Promise<AuthMeResponse> => request("/api/auth/me"),
   loadData: (): Promise<FinanceBootstrapResponse> => request("/api/data"),
+  sendAssistantMessage: (payload: AssistantMessageRequest): Promise<AssistantMessageResponse> => request("/api/assistant/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }),
+  confirmAssistantAction: (confirmationToken: string): Promise<AssistantConfirmResponse> => request("/api/assistant/actions/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmationToken }),
+  }),
   exportBackup: (): Promise<StoredFinancePayload> => request("/api/backup/export"),
   loadExpenseConfig: (): Promise<ExpenseConfigResponse> => request("/api/expenses/config"),
   loadExpenseSummary: (year: number, month: number): Promise<ExpenseMonthSummaryResponse> =>

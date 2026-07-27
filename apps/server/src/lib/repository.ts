@@ -93,6 +93,7 @@ export interface UserDataRepository {
   getExpenseConfig(userId: string): Promise<ExpenseConfigResponse>;
   getExpenseSummary(userId: string, year: number, month: number): Promise<ExpenseMonthSummaryResponse>;
   getTransactions(userId: string, query: TransactionQuery): Promise<TransactionPageResponse>;
+  getTransactionById(userId: string, transactionId: string): Promise<import("@chi-tieu/shared").Transaction | null>;
   getDebtOverview(userId: string): Promise<DebtOverviewResponse>;
   getDebtDetail(userId: string, debtId: string): Promise<DebtDetailResponse>;
   getFundOverview(userId: string, year: number, month: number): Promise<FundOverviewResponse>;

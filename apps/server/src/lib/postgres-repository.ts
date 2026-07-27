@@ -36,6 +36,7 @@ import {
   readSharedFundContributions,
   readSharedFundMembers,
   readStatistics,
+  readTransactionById,
   readTransactions,
 } from "../db/resource-queries.js";
 import { readDebtDetail, readDebtOverview } from "../db/debt-queries.js";
@@ -129,6 +130,10 @@ export class PostgresUserRepository implements UserDataRepository {
 
   getTransactions(userId: string, query: TransactionQuery): Promise<TransactionPageResponse> {
     return readTransactions(this.#db, userId, query);
+  }
+
+  getTransactionById(userId: string, transactionId: string): Promise<import("@chi-tieu/shared").Transaction | null> {
+    return readTransactionById(this.#db, userId, transactionId);
   }
 
   getDebtOverview(userId: string): Promise<DebtOverviewResponse> {

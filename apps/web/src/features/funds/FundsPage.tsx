@@ -24,6 +24,7 @@ import {
   cryptoQuote,
   currentLotPriceVnd,
   fmt,
+  fmtNumber,
   fmtShort,
   FUND_CATEGORIES,
   fundCategory,
@@ -881,7 +882,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
     ? ledger.market.gold ? `${ledger.market.gold.source} · ${fmt(ledger.market.gold.vndPerChi)}/chỉ` : "Chưa có giá vàng tự động"
     : category === "stock"
       ? "Cổ phiếu tự động lấy giá đóng cửa HOSE khi cập nhật giá"
-      : ledger.market.fx ? `Crypto quy đổi theo USD/VND ${fmt(ledger.market.fx.usdVnd).replace(" ₫", "")}` : "Chưa có tỷ giá USD/VND";
+      : ledger.market.fx ? `Crypto quy đổi theo USD/VND ${fmtNumber(ledger.market.fx.usdVnd)}` : "Chưa có tỷ giá USD/VND";
 
   const updateGoldLot = (index: number, patch: Partial<GoldLot>): void => {
     if (!gold) return;
@@ -931,9 +932,9 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
                 <label>Mã {category === "stock" ? "cổ phiếu" : "crypto"}<input value={lot.ticker} aria-label={`Mã tài sản ${index + 1}`} placeholder={category === "stock" ? "VNM" : "BTC"} onChange={(event) => updateLot(index, { ticker: event.target.value.toUpperCase() })} /></label>
                 {category === "stock" ? <label>Sàn giao dịch<input value={lot.exchange ?? "HOSE"} aria-label={`Sàn cổ phiếu ${index + 1}`} onChange={(event) => updateLot(index, { exchange: event.target.value.toUpperCase() })} /></label> : <label>Định danh nguồn giá<input value={crypto ? `${crypto.name} · ${lot.providerId}` : lot.providerId ?? "Chưa khớp"} readOnly /></label>}
                 <label>Số lượng<input type="number" min="0" step="any" value={lot.qty || ""} onChange={(event) => updateLot(index, { qty: Number(event.target.value) || 0 })} /></label>
-                <label>Giá mua ({category === "crypto" ? "USD" : "VND"})<MoneyInput value={lot.purchasePrice ?? 0} ariaLabel={`Giá mua ${index + 1}`} onCommit={(value) => updateLot(index, { purchasePrice: value })} /></label>
+                <label>Giá mua ({category === "crypto" ? "USD" : "VND"})<MoneyInput value={lot.purchasePrice ?? 0} currency={category === "crypto" ? "USD" : "VND"} ariaLabel={`Giá mua ${index + 1}`} onCommit={(value) => updateLot(index, { purchasePrice: value })} /></label>
                 {category === "crypto" ? <label>Tỷ giá lúc mua (VND/USD)<MoneyInput value={lot.purchaseFxVnd ?? 0} ariaLabel={`Tỷ giá mua ${index + 1}`} onCommit={(value) => updateLot(index, { purchaseFxVnd: value })} /></label> : null}
-                <label>Giá thị trường thủ công ({category === "crypto" ? "USD" : "VND"})<MoneyInput value={lot.manualPrice ?? 0} ariaLabel={`Giá thủ công ${index + 1}`} onCommit={(value) => updateLot(index, { manualPrice: value })} /></label>
+                <label>Giá thị trường thủ công ({category === "crypto" ? "USD" : "VND"})<MoneyInput value={lot.manualPrice ?? 0} currency={category === "crypto" ? "USD" : "VND"} ariaLabel={`Giá thủ công ${index + 1}`} onCommit={(value) => updateLot(index, { manualPrice: value })} /></label>
                 <label>Phí (VND)<MoneyInput value={lot.feeVnd ?? 0} ariaLabel={`Phí ${index + 1}`} onCommit={(value) => updateLot(index, { feeVnd: value })} /></label>
                 <label>Ngày mua<input type="date" value={lot.purchasedAt ?? ""} onChange={(event) => updateLot(index, { purchasedAt: event.target.value })} /></label>
                 <label className="asset-note">Ghi chú<input value={lot.note ?? ""} onChange={(event) => updateLot(index, { note: event.target.value })} /></label>

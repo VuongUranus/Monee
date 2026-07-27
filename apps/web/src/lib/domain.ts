@@ -70,21 +70,146 @@ export const FUND_CATEGORIES: Record<FundCategory, { label: string; short: strin
   crypto: { label: "Crypto (mã, số lượng, giá)", short: "Crypto" },
 };
 
-export const fmt = (value: number): string => `${Math.round(value || 0).toLocaleString("vi-VN")} ₫`;
-export const fmtNumber = (value: number): string => Math.round(value || 0).toLocaleString("vi-VN");
+export type MoneyCurrency = "VND" | "USD";
+
+/** Whole-dong display used everywhere VND is shown to the user. */
+export const fmtNumber = (value: number): string => Math.round(value || 0).toLocaleString("en-US");
+export const fmt = (value: number): string => `${fmtNumber(value)}đ`;
+
+/** Decimal display for foreign-currency unit prices. */
+export const fmtUsdNumber = (value: number): string => Number(value || 0).toLocaleString("en-US", {
+  maximumFractionDigits: 10,
+});
+
+export const formatMoneyInputValue = (value: number, currency: MoneyCurrency): string => {
+  if (!(value > 0)) return "";
+  return currency === "VND" ? `${fmtNumber(value)}đ` : fmtUsdNumber(value);
+};
+
 export const fmtShort = (value: number): string => {
   const number = value || 0;
-  if (Math.abs(number) >= 1_000_000) return `${(number / 1_000_000).toLocaleString("vi-VN", { maximumFractionDigits: 1 })}tr`;
+  if (Math.abs(number) >= 1_000_000) return `${(number / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 1 })}tr`;
   if (Math.abs(number) >= 1_000) return `${Math.round(number / 1_000)}k`;
   return String(number);
 };
 
+interface FormattedMoneyExpression {
+  text: string;
+  normalized: string | null;
+  hasDecimal: boolean;
+}
+
+function stripMoneyAdornment(source: string): string {
+  return source.replace(/[₫đ\s]/g, "");
+}
+
+function stripLeadingZeroes(value: string): string {
+  const trimmed = value.replace(/^0+(?=\d)/, "");
+  return trimmed || "0";
+}
+
+function groupThousands(value: string): string {
+  return value.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function normalizeMoneyNumber(raw: string, preferGrouping: boolean): { display: string; normalized: string; hasDecimal: boolean } | null {
+  let integer = "";
+  let fraction = "";
+  let hasDecimal = false;
+
+  if (raw.includes(".")) {
+    const segments = raw.split(".");
+    const beforeDecimal = segments[0] ?? "";
+    const afterDecimal = segments[1] ?? "";
+    const rest = segments.slice(2);
+    const validInteger = /^\d*$/.test(beforeDecimal) || /^\d{1,3}(?:,\d{3})*$/.test(beforeDecimal);
+    if (rest.length || !validInteger || !/^\d*$/.test(afterDecimal)) return null;
+    integer = beforeDecimal.includes(",") ? beforeDecimal.replaceAll(",", "") : beforeDecimal;
+    fraction = afterDecimal;
+    hasDecimal = true;
+  } else if (raw.includes(",")) {
+    const isGrouped = /^\d{1,3}(?:,\d{3})+$/.test(raw);
+    const isTrustedGrouping = preferGrouping && /^\d{0,3}(?:,\d*)+$/.test(raw);
+    if (isGrouped || isTrustedGrouping) {
+      integer = raw.replaceAll(",", "");
+    } else {
+      const segments = raw.split(",");
+      const beforeDecimal = segments[0] ?? "";
+      const afterDecimal = segments[1] ?? "";
+      const rest = segments.slice(2);
+      if (rest.length || !/^\d*$/.test(beforeDecimal) || !/^\d*$/.test(afterDecimal)) return null;
+      integer = beforeDecimal;
+      fraction = afterDecimal;
+      hasDecimal = true;
+    }
+  } else {
+    if (!/^\d+$/.test(raw)) return null;
+    integer = raw;
+  }
+
+  integer = stripLeadingZeroes(integer || "0");
+  return {
+    display: `${groupThousands(integer)}${hasDecimal ? `.${fraction}` : ""}`,
+    normalized: `${integer}${hasDecimal ? `.${fraction}` : ""}`,
+    hasDecimal,
+  };
+}
+
+function formatMoneyExpression(source: string, currency: MoneyCurrency, preferGrouping = false): FormattedMoneyExpression {
+  const body = stripMoneyAdornment(source);
+  if (!body) return { text: "", normalized: "", hasDecimal: false };
+
+  const tokenPattern = /(?:\d[\d.,]*|[.,]\d*)/g;
+  const tokens = [...body.matchAll(tokenPattern)];
+  if (!tokens.length) return { text: source, normalized: null, hasDecimal: false };
+
+  let cursor = 0;
+  let display = "";
+  let normalized = "";
+  let hasDecimal = false;
+  for (const token of tokens) {
+    const start = token.index ?? 0;
+    const operators = body.slice(cursor, start);
+    if (!/^[+\-*/()]*$/.test(operators)) return { text: source, normalized: null, hasDecimal: false };
+    const number = normalizeMoneyNumber(token[0], preferGrouping);
+    if (!number) return { text: source, normalized: null, hasDecimal: false };
+    display += operators + number.display;
+    normalized += operators + number.normalized;
+    hasDecimal ||= number.hasDecimal;
+    cursor = start + token[0].length;
+  }
+
+  const remainder = body.slice(cursor);
+  if (!/^[+\-*/()]*$/.test(remainder)) return { text: source, normalized: null, hasDecimal: false };
+  display += remainder;
+  normalized += remainder;
+  return {
+    text: currency === "VND" ? `${display}đ` : display,
+    normalized,
+    hasDecimal,
+  };
+}
+
+/**
+ * Formats each numeric operand while preserving arithmetic operators. The
+ * optional grouping hint is used only for a one-character edit to an already
+ * formatted value (for example 1,000 + 2 -> 10,002), where a comma is not a
+ * newly typed decimal separator.
+ */
+export function formatMoneyInputText(source: string, currency: MoneyCurrency, preferGrouping = false): string {
+  return formatMoneyExpression(source, currency, preferGrouping).text;
+}
+
+export function moneyExpressionHasDecimal(source: string): boolean {
+  return formatMoneyExpression(source, "USD").hasDecimal;
+}
+
 export function evaluateMoneyExpression(source: string): number {
-  const normalized = source.replace(/[₫\s._]/g, "").replace(/,/g, ".");
-  if (!normalized.trim() || !/^[\d+\-*/().]+$/.test(normalized)) return Number.NaN;
+  const normalized = formatMoneyExpression(source, "USD").normalized;
+  if (!normalized || !/^[\d+\-*/().]+$/.test(normalized)) return Number.NaN;
   try {
     const result = Function(`"use strict"; return (${normalized})`)() as unknown;
-    return typeof result === "number" && Number.isFinite(result) ? Math.round(result) : Number.NaN;
+    return typeof result === "number" && Number.isFinite(result) ? result : Number.NaN;
   } catch {
     return Number.NaN;
   }

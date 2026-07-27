@@ -15,6 +15,7 @@ import { buildApp } from "../src/application.js";
 import { importUserDatabase, verifyUserDatabase } from "../src/db/data-migration.js";
 import * as schema from "../src/db/schema.js";
 import type { MarketService } from "../src/services/market.js";
+import type { AssistantService } from "../src/services/assistant.js";
 import {
   createPostgresTestContext,
   seedUser,
@@ -40,6 +41,7 @@ afterAll(async () => {
 async function createAuthenticatedApp(options: {
   initialData?: StoredFinancePayload;
   marketService?: MarketService;
+  assistantService?: AssistantService;
 } = {}): Promise<{ app: FastifyInstance; cookie: string }> {
   await postgres.reset();
   const initial = options.initialData ?? createDefaultStore() as unknown as StoredFinancePayload;
@@ -51,8 +53,10 @@ async function createAuthenticatedApp(options: {
     env: {
       SESSION_SECRET: "integration-session-secret-at-least-twenty-bytes",
       APP_BASE_URL: "http://127.0.0.1:3000",
+      ...(options.assistantService ? { AI_ASSISTANT_ENABLED: "true" } : {}),
     },
     ...(options.marketService ? { marketService: options.marketService } : {}),
+    ...(options.assistantService ? { assistantService: options.assistantService } : {}),
   });
   const sessionId = await app.finance.sessions.createSession(profile);
   const cookie = `finance_session=${app.finance.sessions.signedSessionValue(sessionId)}`;
@@ -895,6 +899,185 @@ describe("Fastify CRUD, sharing và market routes", () => {
         payload: { expectedRevision: workspace.workspaceRevision },
       });
       expect(undone.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("Trợ lý tài chính AI", () => {
+  function assistantFixture(): ReturnType<typeof createDefaultStore> {
+    const initial = createDefaultStore();
+    initial.funds = [{ id: "reserve", name: "Quỹ dự phòng", color: "#3f7d5c", cat: "saving" }];
+    initial.years["2026"] = {
+      income: new Array(12).fill(0),
+      funds: { reserve: [...new Array(6).fill(0), 100_000, ...new Array(5).fill(0)] },
+      details: { reserve: new Array(12).fill(null) },
+      notes: new Array(12).fill(""),
+    };
+    initial.expense.cats = [{ id: "food", name: "Ăn uống", color: "#E4572E", budget: 5_000_000 }];
+    initial.expense.incomeCats = [{ id: "salary", name: "Lương", color: "#4C9F70" }];
+    initial.expense.accountTypes = [];
+    initial.expense.accounts = [];
+    initial.expense.txns = [];
+    return initial;
+  }
+
+  it("chỉ ghi giao dịch sau xác nhận và xác nhận lại là idempotent", async () => {
+    const assistantService: AssistantService = {
+      async generate(input) {
+        const config = await input.executeTool("get_expense_config", {}) as {
+          categories: Array<{ id: string }>;
+        };
+        await input.executeTool("propose_transaction", {
+          date: "2026-07-27",
+          type: "expense",
+          categoryId: config.categories[0]!.id,
+          amount: 50_000,
+          note: "Ăn sáng",
+        });
+        return {
+          reply: "Mình đã chuẩn bị khoản chi. Hãy bấm Xác nhận.",
+          toolNames: ["get_expense_config", "propose_transaction"],
+          inputTokens: 20,
+          outputTokens: 10,
+        };
+      },
+    };
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: assistantFixture() as unknown as StoredFinancePayload,
+      assistantService,
+    });
+    try {
+      const bootstrap = await app.inject({ method: "GET", url: "/api/data", headers: { cookie } });
+      expect(bootstrap.json().features).toEqual({ aiAssistant: true });
+      const message = await app.inject({
+        method: "POST",
+        url: "/api/assistant/messages",
+        headers: { cookie },
+        payload: {
+          message: "50k ăn sáng",
+          history: [],
+          context: { route: "expenses", selectedYear: 2026, selectedMonth: 7 },
+        },
+      });
+      expect(message.statusCode).toBe(200);
+      const proposal = message.json().proposal;
+      expect(proposal).toMatchObject({
+        kind: "create_transaction",
+        categoryName: "Ăn uống",
+        transaction: { amount: 50_000, note: "Ăn sáng" },
+      });
+      const before = await app.inject({
+        method: "GET",
+        url: "/api/transactions?from=2026-07-01&to=2026-07-31&page=1&pageSize=10",
+        headers: { cookie },
+      });
+      expect(before.json().total).toBe(0);
+
+      const invalidToken = `${proposal.confirmationToken.slice(0, -1)}x`;
+      const rejected = await app.inject({
+        method: "POST",
+        url: "/api/assistant/actions/confirm",
+        headers: { cookie },
+        payload: { confirmationToken: invalidToken },
+      });
+      expect(rejected.statusCode).toBe(400);
+
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/assistant/actions/confirm",
+        headers: { cookie },
+        payload: { confirmationToken: proposal.confirmationToken },
+      });
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toMatchObject({
+        kind: "create_transaction",
+        alreadyApplied: false,
+        transaction: { amount: 50_000 },
+      });
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/assistant/actions/confirm",
+        headers: { cookie },
+        payload: { confirmationToken: proposal.confirmationToken },
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.json()).toMatchObject({ alreadyApplied: true });
+      const after = await app.inject({
+        method: "GET",
+        url: "/api/transactions?from=2026-07-01&to=2026-07-31&page=1&pageSize=10",
+        headers: { cookie },
+      });
+      expect(after.json()).toMatchObject({ total: 1, items: [{ amount: 50_000, note: "Ăn sáng" }] });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("cộng tiền vào quỹ cá nhân và phát hiện bản xem trước đã cũ", async () => {
+    const assistantService: AssistantService = {
+      async generate(input) {
+        const overview = await input.executeTool("get_fund_overview", { year: 2026, month: 7 }) as {
+          funds: Array<{ id: string }>;
+        };
+        await input.executeTool("propose_fund_allocation", {
+          fundId: overview.funds[0]!.id,
+          year: 2026,
+          month: 7,
+          operation: "increment",
+          amount: 2_000_000,
+        });
+        return {
+          reply: "Mình đã chuẩn bị lần trích quỹ. Hãy bấm Xác nhận.",
+          toolNames: ["get_fund_overview", "propose_fund_allocation"],
+          inputTokens: 20,
+          outputTokens: 10,
+        };
+      },
+    };
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: assistantFixture() as unknown as StoredFinancePayload,
+      assistantService,
+    });
+    try {
+      const message = await app.inject({
+        method: "POST",
+        url: "/api/assistant/messages",
+        headers: { cookie },
+        payload: {
+          message: "trích 2 triệu vào quỹ dự phòng",
+          history: [],
+          context: { route: "funds", selectedYear: 2026, selectedMonth: 7 },
+        },
+      });
+      expect(message.statusCode).toBe(200);
+      const proposal = message.json().proposal;
+      expect(proposal).toMatchObject({
+        kind: "allocate_fund",
+        previousAmount: 100_000,
+        nextAmount: 2_100_000,
+      });
+      const confirmed = await app.inject({
+        method: "POST",
+        url: "/api/assistant/actions/confirm",
+        headers: { cookie },
+        payload: { confirmationToken: proposal.confirmationToken },
+      });
+      expect(confirmed.statusCode).toBe(200);
+      expect(confirmed.json()).toMatchObject({
+        kind: "allocate_fund",
+        alreadyApplied: false,
+        fund: { amount: 2_100_000 },
+      });
+      const repeated = await app.inject({
+        method: "POST",
+        url: "/api/assistant/actions/confirm",
+        headers: { cookie },
+        payload: { confirmationToken: proposal.confirmationToken },
+      });
+      expect(repeated.statusCode).toBe(200);
+      expect(repeated.json()).toMatchObject({ alreadyApplied: true });
     } finally {
       await app.close();
     }

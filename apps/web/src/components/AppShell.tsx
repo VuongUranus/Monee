@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { NavLink, useLocation } from "react-router";
 import { BackupModal } from "./BackupModal";
+import { AssistantWidget } from "./AssistantWidget";
 import { Select } from "./Select";
 import { api } from "@/lib/api";
 import { downloadBackup, ensureYear, mergeSharedFunds, MONTHS_FULL, normalizeStore, years } from "@/lib/domain";
@@ -203,6 +204,7 @@ export function AppShell({ children }: PropsWithChildren) {
       </footer>
 
       {backup ? <BackupModal {...backup} onClose={() => setBackup(null)} /> : null}
+      <AssistantWidget />
     </>
   );
 }

@@ -8,6 +8,7 @@
 - npm đi kèm Node.js
 - Neon PostgreSQL
 - Google OAuth client loại **Web application**
+- Google AI Studio API key từ project paid tier nếu bật trợ lý AI
 - Docker cho integration test PostgreSQL/Testcontainers
 
 ## Cấu hình Neon
@@ -127,3 +128,9 @@ npx playwright install chromium
 ```
 
 Session đăng nhập và OAuth state/PKCE được lưu trong PostgreSQL, nên server restart không làm client phải đăng nhập lại (trong thời hạn session 7 ngày). `SESSION_SECRET` phải giữ nguyên giữa các lần restart/deploy; thay đổi secret sẽ vô hiệu hóa cookie session hiện có. Giới hạn body API là 5 MiB.
+
+## Trợ lý tài chính AI
+
+Đặt `AI_ASSISTANT_ENABLED=true`, `GEMINI_API_KEY` và giữ `SESSION_SECRET` ổn định để bật trợ lý. `GEMINI_MODEL` mặc định là `gemini-2.5-flash`; ngày tương đối được hiểu theo `APP_TIME_ZONE` (mặc định `Asia/Ho_Chi_Minh`).
+
+API key chỉ tồn tại ở Fastify. Gemini được phép đọc các read model đã giới hạn và tạo bản xem trước, nhưng không tự ghi dữ liệu. Người dùng phải xác nhận token có chữ ký trước khi ứng dụng tạo giao dịch hoặc cập nhật quỹ tiết kiệm cá nhân. Hội thoại chỉ giữ trong bộ nhớ của tab hiện tại.

@@ -114,7 +114,13 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/data", async (request, reply) => {
     const userId = sessionUser(app, request, reply);
     if (!userId) return reply;
-    return app.finance.repository.getBootstrap(userId);
+    const bootstrap = await app.finance.repository.getBootstrap(userId);
+    return {
+      ...bootstrap,
+      features: {
+        aiAssistant: app.finance.config.aiAssistantEnabled && Boolean(app.finance.assistantService),
+      },
+    };
   });
 
   app.get("/api/backup/export", async (request, reply) => {
@@ -255,7 +261,13 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
     if (!userId) return reply;
     const parsed = body(z.object({ expectedRevision: revision, data: z.record(z.string(), z.unknown()) }), request.body);
     await app.finance.repository.replaceUserData(userId, parsed.expectedRevision, parsed.data);
-    return app.finance.repository.getBootstrap(userId);
+    const bootstrap = await app.finance.repository.getBootstrap(userId);
+    return {
+      ...bootstrap,
+      features: {
+        aiAssistant: app.finance.config.aiAssistantEnabled && Boolean(app.finance.assistantService),
+      },
+    };
   });
 
   app.patch<{ Body: unknown }>("/api/preferences", async (request, reply) => {

@@ -66,6 +66,7 @@ export function ExpensesPage() {
   const [filters, setFilters] = useState<HistoryFilters>(emptyFilters);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [historyPage, setHistoryPage] = useState(1);
+  const [activeBreakdownTab, setActiveBreakdownTab] = useState<"expense" | "income" | "account">("expense");
 
   const monthPrefix = monthKey(year, month);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -234,55 +235,63 @@ export function ExpensesPage() {
         </div>
       </article>
 
-      <div className="expense-chart-grid">
+      <div className="expense-statistics-layout">
         <article className="card">
-          <h2>Cơ cấu chi</h2>
-          <p className="hint">{MONTHS_FULL[month]} / {year}</p>
-          <CategoryDonut categories={ledger.expense.cats} amounts={byExpenseCategory} empty="Chưa có khoản chi nào trong tháng." />
+          <h2>Thống kê theo danh mục — {MONTHS_FULL[month]} / {year}</h2>
+          <div className="table-scroll">
+            <table>
+              <thead><tr><th>Danh mục</th><th>Đã chi</th><th>Trung bình/ngày</th><th>% thu nhập</th><th>Hạn mức</th><th>Còn lại</th><th>Sử dụng</th></tr></thead>
+              <tbody>
+                {ledger.expense.cats.map((item) => {
+                  const value = byExpenseCategory[item.id] ?? 0;
+                  const budget = item.budget ?? 0;
+                  const rawUsage = budget ? value / budget * 100 : 0;
+                  const usage = budget ? Math.min(100, rawUsage) : value ? 100 : 0;
+                  const danger = budget > 0 && rawUsage >= 100;
+                  const warning = budget > 0 && rawUsage >= 80 && rawUsage < 100;
+                  return (
+                    <tr key={item.id}>
+                      <td><span className="fund-tag" style={{ background: item.color }} />{item.name}</td>
+                      <td>{fmt(value)}</td><td>{value ? fmt(value / daysInMonth) : "—"}</td>
+                      <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
+                      <td>{budget ? fmt(budget) : "—"}</td>
+                      <td className={danger ? "negative" : warning ? "warning" : ""}>{budget ? fmt(budget - value) : "—"}</td>
+                      <td>{budget ? <>{Math.round(rawUsage)}%<div className="bar"><span style={{ width: `${usage}%`, background: danger ? "var(--rust)" : warning ? "var(--gold)" : item.color }} /></div></> : <span className="goal-cell">chưa đặt</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot><tr><td>Tổng cộng</td><td>{fmt(spent)}</td><td>{fmt(spent / daysInMonth)}</td><td>{income ? `${Math.round(spent / income * 100)}%` : "0%"}</td><td>{fmt(totalBudget)}</td><td>{fmt(totalBudget - spent)}</td><td /></tr></tfoot>
+            </table>
+          </div>
         </article>
 
-        <article className="card">
-          <h2>Cơ cấu thu</h2>
-          <p className="hint">{MONTHS_FULL[month]} / {year}</p>
-          <CategoryDonut categories={ledger.expense.incomeCats} amounts={byIncomeCategory} empty="Chưa có khoản thu nào trong tháng." />
-        </article>
+        <aside className="expense-statistics-charts" aria-label="Biểu đồ chi tiêu">
+          <div className="expense-statistics-tabs" role="tablist" aria-label="Loại biểu đồ">
+            <button className={activeBreakdownTab === "expense" ? "active" : ""} id="expense-statistics-expense-tab" type="button" role="tab" aria-selected={activeBreakdownTab === "expense"} aria-controls="expense-statistics-panel" onClick={() => setActiveBreakdownTab("expense")}>Cơ cấu chi</button>
+            <button className={activeBreakdownTab === "income" ? "active" : ""} id="expense-statistics-income-tab" type="button" role="tab" aria-selected={activeBreakdownTab === "income"} aria-controls="expense-statistics-panel" onClick={() => setActiveBreakdownTab("income")}>Cơ cấu thu</button>
+            <button className={activeBreakdownTab === "account" ? "active" : ""} id="expense-statistics-account-tab" type="button" role="tab" aria-selected={activeBreakdownTab === "account"} aria-controls="expense-statistics-panel" onClick={() => setActiveBreakdownTab("account")}>Theo tài khoản</button>
+          </div>
 
-        <article className="card">
-          <h2>Chi tiêu theo tài khoản</h2>
-          <p className="hint">{MONTHS_FULL[month]} / {year}</p>
-          <AccountExpenseChart entries={accountExpenses} empty="Chưa có khoản chi nào trong tháng." />
-        </article>
+          <article className="card" id="expense-statistics-panel" role="tabpanel" aria-labelledby={`expense-statistics-${activeBreakdownTab}-tab`}>
+            {activeBreakdownTab === "expense" ? <>
+              <h2>Cơ cấu chi</h2>
+              <p className="hint">{MONTHS_FULL[month]} / {year}</p>
+              <CategoryDonut categories={ledger.expense.cats} amounts={byExpenseCategory} empty="Chưa có khoản chi nào trong tháng." />
+            </> : null}
+            {activeBreakdownTab === "income" ? <>
+              <h2>Cơ cấu thu</h2>
+              <p className="hint">{MONTHS_FULL[month]} / {year}</p>
+              <CategoryDonut categories={ledger.expense.incomeCats} amounts={byIncomeCategory} empty="Chưa có khoản thu nào trong tháng." />
+            </> : null}
+            {activeBreakdownTab === "account" ? <>
+              <h2>Chi tiêu theo tài khoản</h2>
+              <p className="hint">{MONTHS_FULL[month]} / {year}</p>
+              <AccountExpenseChart entries={accountExpenses} empty="Chưa có khoản chi nào trong tháng." />
+            </> : null}
+          </article>
+        </aside>
       </div>
-
-      <article className="card section-card">
-        <h2>Thống kê theo danh mục — {MONTHS_FULL[month]} / {year}</h2>
-        <div className="table-scroll">
-          <table>
-            <thead><tr><th>Danh mục</th><th>Đã chi</th><th>Trung bình/ngày</th><th>% thu nhập</th><th>Hạn mức</th><th>Còn lại</th><th>Sử dụng</th></tr></thead>
-            <tbody>
-              {ledger.expense.cats.map((item) => {
-                const value = byExpenseCategory[item.id] ?? 0;
-                const budget = item.budget ?? 0;
-                const rawUsage = budget ? value / budget * 100 : 0;
-                const usage = budget ? Math.min(100, rawUsage) : value ? 100 : 0;
-                const danger = budget > 0 && rawUsage >= 100;
-                const warning = budget > 0 && rawUsage >= 80 && rawUsage < 100;
-                return (
-                  <tr key={item.id}>
-                    <td><span className="fund-tag" style={{ background: item.color }} />{item.name}</td>
-                    <td>{fmt(value)}</td><td>{value ? fmt(value / daysInMonth) : "—"}</td>
-                    <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
-                    <td>{budget ? fmt(budget) : "—"}</td>
-                    <td className={danger ? "negative" : warning ? "warning" : ""}>{budget ? fmt(budget - value) : "—"}</td>
-                    <td>{budget ? <>{Math.round(rawUsage)}%<div className="bar"><span style={{ width: `${usage}%`, background: danger ? "var(--rust)" : warning ? "var(--gold)" : item.color }} /></div></> : <span className="goal-cell">chưa đặt</span>}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot><tr><td>Tổng cộng</td><td>{fmt(spent)}</td><td>{fmt(spent / daysInMonth)}</td><td>{income ? `${Math.round(spent / income * 100)}%` : "0%"}</td><td>{fmt(totalBudget)}</td><td>{fmt(totalBudget - spent)}</td><td /></tr></tfoot>
-          </table>
-        </div>
-      </article>
 
       <article className="card section-card">
         <h2>Lịch sử thu chi — {MONTHS_FULL[month]} / {year}</h2>

@@ -14,6 +14,11 @@ export interface AppConfig {
   webRoot: string;
   secureCookies: boolean;
   oauthConfigured: boolean;
+  aiAssistantEnabled: boolean;
+  geminiApiKey: string;
+  geminiModel: string;
+  appTimeZone: string;
+  assistantConfigured: boolean;
 }
 
 export type AppEnvironment = NodeJS.ProcessEnv;
@@ -63,6 +68,8 @@ export function createConfig(
   const googleClientId = env.GOOGLE_CLIENT_ID || "";
   const googleClientSecret = env.GOOGLE_CLIENT_SECRET || "";
   const sessionSecret = env.SESSION_SECRET || "";
+  const aiAssistantEnabled = /^(1|true|yes)$/i.test(env.AI_ASSISTANT_ENABLED || "");
+  const geminiApiKey = env.GEMINI_API_KEY || "";
   return {
     host,
     port,
@@ -76,5 +83,10 @@ export function createConfig(
     webRoot: overrides.webRoot ?? path.join(workspaceRoot, "apps", "web"),
     secureCookies: appBaseUrl.startsWith("https://"),
     oauthConfigured: Boolean(googleClientId && googleClientSecret && sessionSecret),
+    aiAssistantEnabled,
+    geminiApiKey,
+    geminiModel: env.GEMINI_MODEL || "gemini-2.5-flash",
+    appTimeZone: env.APP_TIME_ZONE || "Asia/Ho_Chi_Minh",
+    assistantConfigured: aiAssistantEnabled && Boolean(geminiApiKey && sessionSecret),
   };
 }

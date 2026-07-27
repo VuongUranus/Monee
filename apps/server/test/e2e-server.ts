@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { StoredFinancePayload, UserProfile } from "@chi-tieu/shared";
 import { buildApp } from "../src/application.js";
 import { SESSION_TTL_MS } from "../src/lib/session.js";
+import type { AssistantService } from "../src/services/assistant.js";
 import { createPostgresTestContext, seedUser } from "./postgres.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +53,27 @@ const postgres = await createPostgresTestContext();
 await postgres.reset();
 await seedUser(postgres, profile, testLedger as unknown as StoredFinancePayload);
 
+const assistantService: AssistantService = {
+  async generate(input) {
+    const config = await input.executeTool("get_expense_config", {}) as {
+      categories: Array<{ id: string }>;
+    };
+    await input.executeTool("propose_transaction", {
+      date: "2026-07-27",
+      type: "expense",
+      categoryId: config.categories[0]!.id,
+      amount: 50_000,
+      note: "Ăn sáng từ trợ lý",
+    });
+    return {
+      reply: "Mình đã chuẩn bị khoản chi. Hãy kiểm tra rồi xác nhận.",
+      toolNames: ["get_expense_config", "propose_transaction"],
+      inputTokens: 20,
+      outputTokens: 10,
+    };
+  },
+};
+
 const port = Number(process.env.E2E_PORT || 3107);
 const app = await buildApp({
   workspaceRoot,
@@ -60,7 +82,9 @@ const app = await buildApp({
   env: {
     SESSION_SECRET: "e2e-session-secret-at-least-twenty-bytes",
     APP_BASE_URL: `http://127.0.0.1:${port}`,
+    AI_ASSISTANT_ENABLED: "true",
   },
+  assistantService,
   logger: false,
 });
 

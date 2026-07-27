@@ -85,6 +85,7 @@ Tải phần tối thiểu cần để khởi tạo app. Không trả giao dịc
 {
   "user": { "sub": "google-id", "email": "me@example.com", "name": "Minh", "picture": "" },
   "workspaceRevision": 17,
+  "features": { "aiAssistant": true },
   "preferences": {
     "showGoals": true,
     "onboarding": { "status": "completed", "version": 1 },
@@ -100,6 +101,53 @@ Tải phần tối thiểu cần để khởi tạo app. Không trả giao dịc
   "availableYears": [2025, 2026]
 }
 ```
+
+## Trợ lý tài chính AI
+
+Hai endpoint chỉ hoạt động khi server bật `AI_ASSISTANT_ENABLED` và đã cấu hình Gemini. Prompt, lịch sử chat và API key không được lưu trong database.
+
+### `POST /api/assistant/messages`
+
+Nhận tối đa 2.000 ký tự và 12 lượt lịch sử:
+
+```json
+{
+  "message": "50k ăn sáng",
+  "history": [],
+  "context": { "route": "expenses", "selectedYear": 2026, "selectedMonth": 7 }
+}
+```
+
+Response gồm câu trả lời, các nguồn dữ liệu nội bộ đã dùng và tối đa một proposal. Proposal không ghi dữ liệu; `confirmationToken` được ký, gắn với user/revision và hết hạn sau 10 phút.
+
+```json
+{
+  "reply": "Mình đã chuẩn bị khoản chi. Hãy kiểm tra rồi xác nhận.",
+  "evidence": [{ "source": "transactions", "label": "Danh mục và tài khoản" }],
+  "proposal": {
+    "kind": "create_transaction",
+    "actionId": "uuid",
+    "expectedRevision": 17,
+    "confirmationToken": "opaque-token",
+    "expiresAt": "2026-07-27T10:10:00.000Z",
+    "transaction": {
+      "id": "uuid", "date": "2026-07-27", "type": "expense",
+      "cat": "food", "amount": 50000, "note": "Ăn sáng"
+    },
+    "categoryName": "Ăn uống"
+  }
+}
+```
+
+### `POST /api/assistant/actions/confirm`
+
+```json
+{ "confirmationToken": "opaque-token" }
+```
+
+Server xác minh chữ ký, user, thời hạn, tài nguyên và revision trước khi mutation. Response là union theo `kind`, luôn có `workspaceRevision` và `alreadyApplied`; gửi lại cùng token sau khi thao tác đã thành công không tạo dữ liệu trùng.
+
+Các lỗi riêng: `assistant_not_configured` (`503`), `assistant_rate_limited` (`429`), `assistant_timeout` (`504`), `assistant_provider_error` (`502`), `assistant_content_blocked` (`400`) và `assistant_action_expired` (`400`).
 
 ### Backup/import
 

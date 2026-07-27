@@ -13,7 +13,9 @@ import { PostgresUserRepository } from "./lib/postgres-repository.js";
 import { createDatabaseClient, type FinanceDatabase } from "./db/client.js";
 import { SessionManager } from "./lib/session.js";
 import { createMarketService, type FetchLike, type MarketService } from "./services/market.js";
+import { createGeminiAssistantService, type AssistantService } from "./services/assistant.js";
 import { authRoutes } from "./routes/auth.js";
+import { assistantRoutes } from "./routes/assistant.js";
 import { dataRoutes } from "./routes/data.js";
 import { marketRoutes } from "./routes/market.js";
 import { webRoutes } from "./routes/web.js";
@@ -40,6 +42,7 @@ export interface BuildAppOptions {
   env?: AppEnvironment;
   fetchImpl?: FetchLike;
   marketService?: MarketService;
+  assistantService?: AssistantService | null;
   repository?: UserDataRepository;
   database?: FinanceDatabase;
   now?: () => number;
@@ -90,6 +93,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }) as UserDataRepository;
   const sessions = new SessionManager({ config, db: database, now, randomBytes });
   const marketService = options.marketService ?? createMarketService({ fetchImpl, now });
+  const assistantService = options.assistantService !== undefined
+    ? options.assistantService
+    : config.assistantConfigured
+      ? createGeminiAssistantService({
+        apiKey: config.geminiApiKey,
+        model: config.geminiModel,
+        now,
+      })
+      : null;
   const app = options.app ?? Fastify({
     logger: options.logger ?? false,
     bodyLimit: 5 * 1024 * 1024,
@@ -99,7 +111,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.log.warn("DATABASE_URL đang dùng Neon direct endpoint; hãy dùng hostname có -pooler cho Fastify runtime.");
   }
 
-  app.decorate("finance", { config, repository: measuredRepository, sessions, marketService, fetchImpl });
+  app.decorate("finance", { config, repository: measuredRepository, sessions, marketService, assistantService, fetchImpl });
   if (databaseClient) {
     app.addHook("onReady", async () => {
       await databaseClient.pool.query("select 1");
@@ -163,6 +175,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(authRoutes);
   await app.register(dataRoutes);
   await app.register(marketRoutes);
+  await app.register(assistantRoutes);
 
   if (options.serveWeb !== false) {
     await app.register(webRoutes, { development: options.development === true });
@@ -184,6 +197,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       "/api/statistics",
       "/api/shared-funds",
       "/api/market/quotes",
+      "/api/assistant/messages",
+      "/api/assistant/actions/confirm",
     ]);
     if (known.has(request.url.split("?")[0] ?? "")) {
       return reply.code(405).type("text/plain").send("Method not allowed");
