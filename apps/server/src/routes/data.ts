@@ -968,6 +968,15 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) { return sendError(reply, error); }
   });
 
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/shared-funds/:id/unshare", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ revision }), request.body);
+    try {
+      return await app.finance.repository.unshareFund(userId, request.params.id, parsed.revision);
+    } catch (error) { return sendError(reply, error); }
+  });
+
   app.post<{ Params: { id: string }; Body: unknown }>("/api/shared-funds/:id/contributions", async (request, reply) => {
     const userId = sessionUser(app, request, reply);
     if (!userId) return reply;

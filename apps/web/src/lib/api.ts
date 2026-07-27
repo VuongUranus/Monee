@@ -275,6 +275,9 @@ export const api = {
   deleteSharedFund: (id: string, revision: number): Promise<SharedMutationResponse<DeleteMutationResult>> => request(`/api/shared-funds/${encodeURIComponent(id)}`, {
     method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision }),
   }),
+  unshareFund: (id: string, revision: number): Promise<PersonalMutationResponse<{ id: string }>> => request(`/api/shared-funds/${encodeURIComponent(id)}/unshare`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision }),
+  }),
   addSharedFundContribution: (id: string, month: string, amount: number, note: string, revision: number): Promise<SharedMutationResponse<unknown>> => request(`/api/shared-funds/${encodeURIComponent(id)}/contributions`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ month, amount, note, revision }),
   }),

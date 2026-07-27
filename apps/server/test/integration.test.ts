@@ -358,6 +358,33 @@ describe("Fastify CRUD, sharing và market routes", () => {
         headers: { cookie: bobCookie },
       })).json();
       expect(afterRemoval.funds.some((fund: { id: string }) => fund.id === shared.id)).toBe(false);
+
+      const ownerBeforeUnshare = (await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie },
+      })).json();
+      const ownerShared = ownerBeforeUnshare.funds.find((fund: { id: string }) => fund.id === shared.id);
+      const unshared = await app.inject({
+        method: "POST",
+        url: `/api/shared-funds/${shared.id}/unshare`,
+        headers: { cookie },
+        payload: { revision: ownerShared.revision },
+      });
+      expect(unshared.statusCode).toBe(200);
+      expect(unshared.json()).toEqual(expect.objectContaining({
+        data: { id: shared.id },
+        workspaceRevision: ownerAfterShare.workspaceRevision + 2,
+      }));
+      const ownerAfterUnshare = (await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie },
+      })).json();
+      const personalFund = ownerAfterUnshare.funds.find((fund: { id: string }) => fund.id === shared.id);
+      expect(personalFund).toEqual(expect.objectContaining({ id: shared.id }));
+      expect(personalFund.role).toBeUndefined();
+      expect(personalFund.revision).toBeUndefined();
     } finally {
       await app.close();
     }

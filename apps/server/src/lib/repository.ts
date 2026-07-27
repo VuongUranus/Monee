@@ -140,6 +140,11 @@ export interface UserDataRepository {
     role: SharedFundRole,
     expectedRevision: number,
   ): Promise<{ id: string; revision: number }>;
+  unshareFund(
+    ownerId: string,
+    fundId: string,
+    expectedRevision: number,
+  ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<{ id: string }>>;
   replaceUserData(userId: string, expectedRevision: number, data: StoredFinancePayload): Promise<number>;
 }
 

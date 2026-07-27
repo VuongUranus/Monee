@@ -289,4 +289,49 @@ export class PostgresUserRepository implements UserDataRepository {
     return { id: sharedExternalId, revision: 1 };
   }
 
+  async unshareFund(
+    ownerId: string,
+    externalFundId: string,
+    expectedRevision: number,
+  ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<{ id: string }>> {
+    return this.#db.transaction(async (tx) => {
+      const userLock: any = await tx.execute(sql`select workspace_revision from users where id = ${ownerId} for update`);
+      const currentWorkspaceRevision = Number((userLock.rows?.[0] ?? userLock[0])?.workspace_revision);
+      if (!currentWorkspaceRevision) throw new Error("Không tìm thấy dữ liệu tài khoản.");
+
+      const fundLock: any = await tx.execute(sql`
+        select f.id, f.revision
+        from funds f
+        where f.owner_id = ${ownerId}
+          and f.external_id = ${externalFundId}
+          and f.shared = true
+        for update
+      `);
+      const fund = fundLock.rows?.[0] ?? fundLock[0];
+      if (!fund) throw new SharedFundError("fund_not_found", 404, "Không tìm thấy quỹ chung.");
+      if (Number(fund.revision) !== expectedRevision) {
+        throw new SharedFundError("shared_fund_conflict", 409, "Quỹ đã được người khác cập nhật. Hãy tải lại.");
+      }
+
+      const members = await tx.select({ userId: schema.fundMembers.userId })
+        .from(schema.fundMembers).where(eq(schema.fundMembers.fundId, String(fund.id)));
+      if (members.length > 0) {
+        throw new SharedFundError("fund_has_members", 409, "Hãy thu hồi toàn bộ thành viên trước khi ngừng chia sẻ quỹ.");
+      }
+
+      await tx.update(schema.funds).set({
+        shared: false,
+        // Revision is only exposed for shared funds, but the database requires it to stay positive.
+        revision: 1,
+        updatedAt: new Date(this.#now()),
+      }).where(eq(schema.funds.id, String(fund.id)));
+      const workspaceRevision = currentWorkspaceRevision + 1;
+      await tx.update(schema.users).set({
+        workspaceRevision,
+        updatedAt: new Date(this.#now()),
+      }).where(eq(schema.users.id, ownerId));
+      return { data: { id: externalFundId }, workspaceRevision };
+    });
+  }
+
 }

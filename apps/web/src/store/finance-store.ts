@@ -110,6 +110,7 @@ interface FinanceState {
     options?: MutationOptions<T>,
   ): Promise<void>;
   shareFund(fundId: string, email: string, role: SharedFundRole): Promise<void>;
+  unshareFund(fundId: string): Promise<void>;
   deleteSharedFund(fundId: string): Promise<void>;
   replaceLedger(ledger: FinanceStore, persist?: boolean): void;
   persistMarketQuotes(payload: MarketQuotesRequest): Promise<PersistedMarketQuotesResponse>;
@@ -881,6 +882,31 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       writeQueue = operation.then(() => undefined, () => undefined);
       try {
         await operation;
+        await refreshWhenSettled(mutationVersion);
+      } catch (error) {
+        pendingRouteRefresh = false;
+        throw error;
+      }
+    },
+
+    async unshareFund(fundId) {
+      const shared = get().sharedFunds[fundId];
+      if (!shared) throw new Error("Không tìm thấy quỹ chung.");
+      const mutationVersion = ++queuedMutationVersion;
+      ++writeVersion;
+      pendingRouteRefresh = true;
+      const operation = writeQueue.then(() => {
+        const latest = get().sharedFunds[fundId];
+        if (!latest) throw new Error("Không tìm thấy quỹ chung.");
+        return api.unshareFund(fundId, latest.revision);
+      });
+      writeQueue = operation.then(() => undefined, () => undefined);
+      try {
+        const result = await operation;
+        set((state) => {
+          state.workspaceRevision = result.workspaceRevision;
+          if (state.bootstrapData) state.bootstrapData.workspaceRevision = result.workspaceRevision;
+        });
         await refreshWhenSettled(mutationVersion);
       } catch (error) {
         pendingRouteRefresh = false;

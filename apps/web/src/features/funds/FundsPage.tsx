@@ -616,6 +616,7 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
   const sharedFunds = useFinanceStore((state) => state.sharedFunds);
   const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
   const shareFund = useFinanceStore((state) => state.shareFund);
+  const unshareFund = useFinanceStore((state) => state.unshareFund);
   const fund = ledger.funds.find((item) => item.id === fundId)!;
   const shared = sharedFunds[fundId];
   const [email, setEmail] = useState("");
@@ -667,8 +668,19 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
     }
   };
 
+  const stopSharing = async (): Promise<void> => {
+    if (!shared || members.length > 0 || !window.confirm("Ngừng chia sẻ quỹ này? Quỹ sẽ trở lại là quỹ cá nhân.")) return;
+    setMessage("Đang chuyển quỹ về cá nhân…");
+    try {
+      await unshareFund(fundId);
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Không thể ngừng chia sẻ quỹ.");
+    }
+  };
+
   return (
-    <Modal title={`Chia sẻ quỹ — ${fund.name}`} onClose={onClose} footer={<button className="btn" type="button" onClick={onClose}>Đóng</button>}>
+    <Modal title={`Chia sẻ quỹ — ${fund.name}`} onClose={onClose} footer={<><button className="btn" type="button" onClick={onClose}>Đóng</button>{shared && members.length === 0 ? <button className="btn danger" type="button" onClick={() => void stopSharing()}>Ngừng chia sẻ</button> : null}</>}>
       <p className="hint">Chỉ mời được email Google đã từng đăng nhập ứng dụng. Thành viên xem được toàn bộ dữ liệu của quỹ, không xem thu chi cá nhân.</p>
       <div className="manager-add">
         <input type="email" value={email} placeholder="email@example.com" aria-label="Email thành viên" onChange={(event) => setEmail(event.target.value)} />
