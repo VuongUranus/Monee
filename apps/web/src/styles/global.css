@@ -363,15 +363,35 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 .backup-text { width: 100%; height: 260px; resize: vertical; font: 12px/1.4 ui-monospace, monospace; }
 .success-message { min-height: 18px; margin-top: 8px; color: var(--green); font-size: 12px; }
 
-.auth-gate { display: grid; min-height: 100vh; place-items: center; padding: 24px; background: var(--ink); border-bottom: 6px solid var(--gold); }
-.auth-card { width: min(480px, 100%); padding: 40px; color: #1c2321; background: #fffdf8; border: 1px solid #3a403e; border-radius: 24px; box-shadow: 0 30px 90px rgb(0 0 0 / 35%); text-align: center; }
-.auth-card h1 { margin: 8px 0 12px; font: 600 36px/1.1 var(--font-display); }
-.auth-card p:not(.eyebrow) { margin: 0 auto 22px; color: #8a8577; line-height: 1.55; }
-.auth-card .btn.primary { color: #f6f1e7; background: #1c2321; border-color: #1c2321; }
-.auth-card .btn.primary:hover:not(:disabled) { color: #fff; background: #000; border-color: #000; }
-.brand-mark { display: grid; width: 58px; height: 58px; margin: 0 auto 18px; place-items: center; color: #fff; background: var(--green); border-radius: 16px; font: 700 29px var(--font-display); }
+.auth-gate {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background-color: #fff2cc;
+  background-image:
+    radial-gradient(circle at 14% 18%, rgb(244 204 204 / 55%) 0 7rem, transparent 7.1rem),
+    radial-gradient(circle at 86% 82%, rgb(252 232 239 / 85%) 0 10rem, transparent 10.1rem),
+    radial-gradient(rgb(166 77 121 / 10%) 1px, transparent 1px),
+    linear-gradient(145deg, #fff2cc 0%, #fff9f2 58%, #fff7f8 100%);
+  background-size: auto, auto, 22px 22px, auto;
+  border-bottom: 6px solid var(--line);
+}
+.auth-card { width: min(480px, 100%); padding: 40px; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 30px 80px -30px rgb(166 77 121 / 45%), 0 1px 0 #fff inset; text-align: center; }
+.auth-card .eyebrow { color: var(--muted); }
+.auth-card h1 { margin: 8px 0 12px; color: var(--accent); font: 600 36px/1.1 var(--font-display); }
+.auth-card p:not(.eyebrow) { margin: 0 auto 22px; color: var(--muted); line-height: 1.55; }
+.auth-card .btn.primary { min-width: 220px; }
+.brand-mark { display: grid; width: 58px; height: 58px; margin: 0 auto 24px; place-items: center; color: #fff; background: var(--accent); border-radius: 16px; box-shadow: 0 0 0 8px var(--accent-soft); font: 700 29px var(--font-display); }
+.auth-progress { width: min(280px, 100%); height: 10px; margin: 4px auto 0; overflow: hidden; background: var(--accent-soft); border: 1px solid var(--line); border-radius: 999px; box-shadow: 0 1px 2px rgb(166 77 121 / 10%) inset; }
+.auth-progress span { display: block; width: 42%; height: 100%; background: linear-gradient(90deg, #f4cccc, var(--accent), #f4cccc); border-radius: inherit; animation: auth-progress 1.25s ease-in-out infinite; }
+@keyframes auth-progress { from { transform: translateX(-110%); } to { transform: translateX(250%); } }
 .auth-status { min-height: 20px; margin-top: 14px; color: var(--rust); font-size: 13px; }
 .site-footer { max-width: 1320px; margin: 24px auto 0; padding: 0 24px 60px; color: var(--muted); font-size: 12px; text-align: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-progress span { width: 100%; opacity: .55; animation: none; }
+}
 
 @media (max-width: 1080px) {
   .stat-row-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -427,4 +447,5 @@ table .custom-select { max-width: 160px; font-size: 13px; }
   .manager-row .danger { grid-column: 3; }
   .manager-row .custom-select, .category-row > .money, .category-row > span { grid-column: 3; }
   .auth-card { padding: 30px 20px; }
+  .auth-card .btn.primary { width: 100%; min-width: 0; }
 }

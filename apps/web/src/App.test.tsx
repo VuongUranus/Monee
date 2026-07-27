@@ -7,6 +7,7 @@ import type {
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { AuthGate } from "./components/AuthGate";
 import { createDefaultStore } from "./lib/domain";
 import { useFinanceStore } from "./store/finance-store";
 
@@ -229,10 +230,25 @@ beforeEach(() => {
 });
 
 describe("App", () => {
+  it("hiện tiến trình và ẩn nút đăng nhập khi đang bootstrap", () => {
+    render(<AuthGate />);
+    expect(screen.getByRole("progressbar", { name: "Đang tải dữ liệu của bạn" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Đăng nhập với Google" })).not.toBeInTheDocument();
+  });
+
   it("hiện cổng đăng nhập khi API trả 401", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "unauthorized" }, 401)));
     render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
     expect(await screen.findByRole("button", { name: "Đăng nhập với Google" })).toBeVisible();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("hiện thông báo lỗi và nút đăng nhập khi bootstrap thất bại", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "server_error" }, 500)));
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    expect(await screen.findByText("Không thể kết nối. Hãy kiểm tra mạng rồi thử lại.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Đăng nhập với Google" })).toBeVisible();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
   it("tải sổ và render route React từ URL trực tiếp", async () => {
