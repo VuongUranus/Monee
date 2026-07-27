@@ -42,6 +42,7 @@ import {
 import { readDebtDetail, readDebtOverview } from "../db/debt-queries.js";
 import {
   mutatePersonalResource,
+  mutatePersonalResources,
   mutatePersonalResourceWithResult,
   mutateSharedResource,
 } from "../db/resource-mutations.js";
@@ -49,6 +50,7 @@ import * as schema from "../db/schema.js";
 import {
   SharedFundError,
   cleanUserProfile,
+  type AssistantMutationCommand,
   type PersonalMutationCommand,
   type TransactionMutationCommand,
   type SharedMutationCommand,
@@ -175,6 +177,14 @@ export class PostgresUserRepository implements UserDataRepository {
     command: PersonalMutationCommand,
   ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<T>> {
     return mutatePersonalResource<T>(this.#db, userId, expectedRevision, command);
+  }
+
+  mutatePersonalResources<T>(
+    userId: string,
+    expectedRevision: number,
+    commands: AssistantMutationCommand[],
+  ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<T[]>> {
+    return mutatePersonalResources<T>(this.#db, userId, expectedRevision, commands);
   }
 
   mutateTransaction(

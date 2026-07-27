@@ -751,28 +751,33 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
 
     async applyAssistantConfirmation(response) {
       const transactionQueryBefore = get().transactionQuery;
+      const transactionResults = response.results.filter((result) => result.kind === "create_transaction");
+      const fundResults = response.results.filter((result) => result.kind === "allocate_fund");
       set((state) => {
         state.workspaceRevision = response.workspaceRevision;
         if (state.bootstrapData) state.bootstrapData.workspaceRevision = response.workspaceRevision;
         state.statistics = null;
-        if (response.kind === "create_transaction") {
+        if (transactionResults.length) {
           state.expenseSummary = null;
           state.transactionPage = null;
           state.transactionQuery = null;
-        } else {
+        }
+        if (fundResults.length) {
           state.fundOverview = null;
           state.fundDetails = {};
-          const year = state.ledger.years[String(response.fund.year)];
-          if (year?.funds[response.fund.fundId]) {
-            year.funds[response.fund.fundId]![response.fund.month - 1] = response.fund.amount;
+          for (const result of fundResults) {
+            const year = state.ledger.years[String(result.fund.year)];
+            if (year?.funds[result.fund.fundId]) {
+              year.funds[result.fund.fundId]![result.fund.month - 1] = result.fund.amount;
+            }
           }
         }
         state.saveState = "saved";
-        state.saveMessage = response.alreadyApplied ? "Thao tác đã được ghi trước đó." : "Đã lưu từ trợ lý.";
+        state.saveMessage = response.alreadyApplied ? "Nhóm thao tác đã được ghi trước đó." : "Đã lưu từ trợ lý.";
       });
-      if (response.kind === "create_transaction" && location.pathname === "/expenses") {
+      if (transactionResults.length && location.pathname === "/expenses") {
         await get().loadExpenses(transactionQueryBefore ?? {});
-      } else if (response.kind === "allocate_fund" && location.pathname === "/funds") {
+      } else if (fundResults.length && location.pathname === "/funds") {
         await get().loadFunds(true);
       }
     },

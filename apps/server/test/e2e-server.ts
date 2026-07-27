@@ -34,7 +34,10 @@ const testLedger = {
   prices: {},
   showGoals: false,
   expense: {
-    cats: [{ id: "food", name: "Ăn uống", color: "#E4572E", budget: 5_000_000 }],
+    cats: [
+      { id: "food", name: "Ăn uống", color: "#E4572E", budget: 5_000_000 },
+      { id: "household", name: "Đồ dùng", color: "#3B82F6", budget: 2_000_000 },
+    ],
     incomeCats: [{ id: "salary", name: "Lương", color: "#4C9F70" }],
     txns: [],
   },
@@ -58,16 +61,30 @@ const assistantService: AssistantService = {
     const config = await input.executeTool("get_expense_config", {}) as {
       categories: Array<{ id: string }>;
     };
-    await input.executeTool("propose_transaction", {
-      date: "2026-07-27",
-      type: "expense",
-      categoryId: config.categories[0]!.id,
-      amount: 50_000,
-      note: "Ăn sáng từ trợ lý",
+    await input.executeTool("propose_finance_batch", {
+      transactions: [
+        {
+          position: 0,
+          date: "2026-07-27",
+          type: "expense",
+          categoryId: config.categories[0]!.id,
+          amount: 30_000,
+          note: "Ăn sáng",
+        },
+        {
+          position: 1,
+          date: "2026-07-27",
+          type: "expense",
+          categoryId: config.categories[1]!.id,
+          amount: 45_000,
+          note: "Kem đánh răng",
+        },
+      ],
+      fundAllocations: [],
     });
     return {
-      reply: "Mình đã chuẩn bị khoản chi. Hãy kiểm tra rồi xác nhận.",
-      toolNames: ["get_expense_config", "propose_transaction"],
+      reply: "Mình đã chuẩn bị 2 khoản chi. Hãy kiểm tra rồi xác nhận.",
+      toolNames: ["get_expense_config", "propose_finance_batch"],
       inputTokens: 20,
       outputTokens: 10,
     };
@@ -89,6 +106,8 @@ const app = await buildApp({
 });
 
 app.get("/__test/login", async (_request, reply) => {
+  await postgres.reset();
+  await seedUser(postgres, profile, testLedger as unknown as StoredFinancePayload);
   const sessionId = await app.finance.sessions.createSession(profile);
   return reply
     .setCookie("finance_session", app.finance.sessions.signedSessionValue(sessionId), {

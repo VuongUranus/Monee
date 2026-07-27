@@ -476,21 +476,18 @@ export interface AssistantEvidence {
   label: string;
 }
 
-interface AssistantProposalBase {
+interface AssistantProposalActionBase {
   actionId: string;
-  expectedRevision: number;
-  confirmationToken: string;
-  expiresAt: string;
 }
 
-export interface AssistantTransactionProposal extends AssistantProposalBase {
+export interface AssistantTransactionProposalAction extends AssistantProposalActionBase {
   kind: "create_transaction";
   transaction: Transaction;
   categoryName: string;
   accountName?: string;
 }
 
-export interface AssistantFundProposal extends AssistantProposalBase {
+export interface AssistantFundProposalAction extends AssistantProposalActionBase {
   kind: "allocate_fund";
   fundId: string;
   fundName: string;
@@ -502,7 +499,18 @@ export interface AssistantFundProposal extends AssistantProposalBase {
   nextAmount: number;
 }
 
-export type AssistantProposal = AssistantTransactionProposal | AssistantFundProposal;
+export type AssistantProposalAction =
+  | AssistantTransactionProposalAction
+  | AssistantFundProposalAction;
+
+export interface AssistantProposalBatch {
+  kind: "action_batch";
+  batchId: string;
+  expectedRevision: number;
+  actions: AssistantProposalAction[];
+  confirmationToken: string;
+  expiresAt: string;
+}
 
 export interface AssistantMessageRequest {
   message: string;
@@ -513,22 +521,28 @@ export interface AssistantMessageRequest {
 export interface AssistantMessageResponse {
   reply: string;
   evidence: AssistantEvidence[];
-  proposal?: AssistantProposal;
+  proposal?: AssistantProposalBatch;
 }
 
-export type AssistantConfirmResponse =
+export type AssistantConfirmedAction =
   | {
     kind: "create_transaction";
+    actionId: string;
     transaction: Transaction;
-    workspaceRevision: number;
-    alreadyApplied: boolean;
   }
   | {
     kind: "allocate_fund";
+    actionId: string;
     fund: FundMonthDetailResponse;
-    workspaceRevision: number;
-    alreadyApplied: boolean;
   };
+
+export interface AssistantConfirmResponse {
+  kind: "action_batch";
+  batchId: string;
+  results: AssistantConfirmedAction[];
+  workspaceRevision: number;
+  alreadyApplied: boolean;
+}
 
 /** Current expense screen data that must be returned after a transaction mutation. */
 export interface ExpenseTransactionView {

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AssistantEvidence,
   AssistantHistoryTurn,
-  AssistantProposal,
+  AssistantProposalAction,
+  AssistantProposalBatch,
 } from "@chi-tieu/shared";
 import { useLocation } from "react-router";
 import { api, ApiRequestError, UnauthorizedError } from "@/lib/api";
@@ -16,7 +17,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   text: string;
   evidence?: AssistantEvidence[];
-  proposal?: AssistantProposal;
+  proposal?: AssistantProposalBatch;
   proposalStatus?: ProposalStatus;
 }
 
@@ -35,7 +36,7 @@ function ProposalCard({
   onConfirm,
   onCancel,
 }: {
-  proposal: AssistantProposal;
+  proposal: AssistantProposalBatch;
   status: ProposalStatus;
   onConfirm(): void;
   onCancel(): void;
@@ -45,29 +46,52 @@ function ProposalCard({
       : status === "stale" ? "Cần tạo lại"
         : status === "confirming" ? "Đang lưu…"
           : "Chờ xác nhận";
+  const transactionTotals = proposal.actions.reduce((totals, action) => {
+    if (action.kind === "create_transaction") totals[action.transaction.type] += action.transaction.amount;
+    return totals;
+  }, { income: 0, expense: 0 });
+  const actionTitle = (action: AssistantProposalAction): string => action.kind === "create_transaction"
+    ? action.transaction.type === "expense" ? "Khoản chi" : "Khoản thu"
+    : "Trích quỹ";
   return (
     <section className={`assistant-proposal status-${status}`} aria-label="Bản xem trước hành động">
       <div className="assistant-proposal-head">
-        <strong>{proposal.kind === "create_transaction" ? "Ghi khoản thu chi" : "Trích quỹ"}</strong>
+        <strong>{proposal.actions.length} thao tác</strong>
         <span>{statusLabel}</span>
       </div>
-      {proposal.kind === "create_transaction" ? (
-        <dl>
-          <div><dt>Ngày</dt><dd>{proposal.transaction.date}</dd></div>
-          <div><dt>Loại</dt><dd>{proposal.transaction.type === "expense" ? "Chi" : "Thu"}</dd></div>
-          <div><dt>Danh mục</dt><dd>{proposal.categoryName}</dd></div>
-          <div><dt>Tài khoản</dt><dd>{proposal.accountName ?? "Chưa xác định"}</dd></div>
-          <div><dt>Số tiền</dt><dd>{fmt(proposal.transaction.amount)}</dd></div>
-          <div><dt>Ghi chú</dt><dd>{proposal.transaction.note || "—"}</dd></div>
-        </dl>
-      ) : (
-        <dl>
-          <div><dt>Quỹ</dt><dd>{proposal.fundName}</dd></div>
-          <div><dt>Kỳ</dt><dd>{MONTHS_FULL[proposal.month - 1]} / {proposal.year}</dd></div>
-          <div><dt>Thao tác</dt><dd>{proposal.operation === "increment" ? `Cộng ${fmt(proposal.amount)}` : `Đặt thành ${fmt(proposal.amount)}`}</dd></div>
-          <div><dt>Trước → sau</dt><dd>{fmt(proposal.previousAmount)} → {fmt(proposal.nextAmount)}</dd></div>
-        </dl>
-      )}
+      {transactionTotals.income || transactionTotals.expense ? (
+        <div className="assistant-proposal-summary" aria-label="Tổng thu chi">
+          {transactionTotals.income ? <span>Thu <strong>{fmt(transactionTotals.income)}</strong></span> : null}
+          {transactionTotals.expense ? <span>Chi <strong>{fmt(transactionTotals.expense)}</strong></span> : null}
+        </div>
+      ) : null}
+      <ol className="assistant-proposal-list">
+        {proposal.actions.map((action, index) => (
+          <li key={action.actionId}>
+            <div className="assistant-proposal-item-head">
+              <strong>{index + 1}. {actionTitle(action)}</strong>
+              <span>{action.kind === "create_transaction"
+                ? fmt(action.transaction.amount)
+                : action.operation === "increment" ? `+${fmt(action.amount)}` : fmt(action.amount)}</span>
+            </div>
+            {action.kind === "create_transaction" ? (
+              <dl>
+                <div><dt>Ngày</dt><dd>{action.transaction.date}</dd></div>
+                <div><dt>Danh mục</dt><dd>{action.categoryName}</dd></div>
+                <div><dt>Tài khoản</dt><dd>{action.accountName ?? "Chưa xác định"}</dd></div>
+                <div><dt>Ghi chú</dt><dd>{action.transaction.note || "—"}</dd></div>
+              </dl>
+            ) : (
+              <dl>
+                <div><dt>Quỹ</dt><dd>{action.fundName}</dd></div>
+                <div><dt>Kỳ</dt><dd>{MONTHS_FULL[action.month - 1]} / {action.year}</dd></div>
+                <div><dt>Thao tác</dt><dd>{action.operation === "increment" ? `Cộng ${fmt(action.amount)}` : `Đặt thành ${fmt(action.amount)}`}</dd></div>
+                <div><dt>Trước → sau</dt><dd>{fmt(action.previousAmount)} → {fmt(action.nextAmount)}</dd></div>
+              </dl>
+            )}
+          </li>
+        ))}
+      </ol>
       {status === "pending" || status === "confirming" ? (
         <div className="assistant-proposal-actions">
           <button className="btn sm primary" type="button" disabled={status === "confirming"} onClick={onConfirm}>Xác nhận</button>
@@ -162,14 +186,17 @@ export function AssistantWidget() {
       const result = await api.confirmAssistantAction(message.proposal.confirmationToken);
       await applyConfirmation(result);
       updateProposalStatus(message.id, "confirmed");
+      const transactionResults = result.results.filter((item) => item.kind === "create_transaction");
+      const fundResults = result.results.filter((item) => item.kind === "allocate_fund");
+      const successText = result.results.length === 1
+        ? transactionResults.length ? "Đã ghi khoản thu chi thành công." : "Đã cập nhật quỹ thành công."
+        : `Đã ghi ${result.results.length} thao tác thành công (${transactionResults.length} khoản thu/chi, ${fundResults.length} lần trích quỹ).`;
       setMessages((current) => [...current, {
         id: messageId(),
         role: "assistant",
         text: result.alreadyApplied
-          ? "Thao tác này đã được ghi trước đó; dữ liệu hiện tại đã được đồng bộ."
-          : result.kind === "create_transaction"
-            ? "Đã ghi khoản thu chi thành công."
-            : "Đã cập nhật quỹ thành công.",
+          ? "Nhóm thao tác này đã được ghi trước đó; dữ liệu hiện tại đã được đồng bộ."
+          : successText,
       }]);
     } catch (caught) {
       const stale = caught instanceof ApiRequestError

@@ -5,12 +5,9 @@ import { AssistantWidget } from "./AssistantWidget";
 import { api } from "@/lib/api";
 import { useFinanceStore } from "@/store/finance-store";
 
-const proposal = {
+const breakfastAction = {
   kind: "create_transaction" as const,
   actionId: "d8b6c3b1-2b96-4b30-84dd-513a838ce02b",
-  expectedRevision: 1,
-  confirmationToken: "signed-token",
-  expiresAt: "2026-07-27T10:10:00.000Z",
   transaction: {
     id: "d8b6c3b1-2b96-4b30-84dd-513a838ce02b",
     date: "2026-07-27",
@@ -20,6 +17,27 @@ const proposal = {
     note: "Ăn sáng",
   },
   categoryName: "Ăn uống",
+};
+const toothpasteAction = {
+  kind: "create_transaction" as const,
+  actionId: "b58a361d-3c94-4659-8a80-f37cf091c85a",
+  transaction: {
+    id: "b58a361d-3c94-4659-8a80-f37cf091c85a",
+    date: "2026-07-27",
+    type: "expense" as const,
+    cat: "household",
+    amount: 45_000,
+    note: "Kem đánh răng",
+  },
+  categoryName: "Đồ dùng",
+};
+const proposal = {
+  kind: "action_batch" as const,
+  batchId: "674e98e5-eaef-4a93-a7e2-0c18435180b6",
+  expectedRevision: 1,
+  confirmationToken: "signed-token",
+  expiresAt: "2026-07-27T10:10:00.000Z",
+  actions: [breakfastAction, toothpasteAction],
 };
 
 describe("AssistantWidget", () => {
@@ -57,13 +75,18 @@ describe("AssistantWidget", () => {
 
   it("chỉ gửi mutation sau khi người dùng xác nhận bản xem trước", async () => {
     vi.spyOn(api, "sendAssistantMessage").mockResolvedValue({
-      reply: "Mình đã chuẩn bị khoản chi. Hãy kiểm tra rồi xác nhận.",
+      reply: "Mình đã chuẩn bị 2 khoản chi. Hãy kiểm tra rồi xác nhận.",
       evidence: [{ source: "transactions", label: "Danh mục và tài khoản" }],
       proposal,
     });
     const confirm = vi.spyOn(api, "confirmAssistantAction").mockResolvedValue({
-      kind: "create_transaction",
-      transaction: proposal.transaction,
+      kind: "action_batch",
+      batchId: proposal.batchId,
+      results: proposal.actions.map((action) => ({
+        kind: "create_transaction" as const,
+        actionId: action.actionId,
+        transaction: action.transaction,
+      })),
       workspaceRevision: 2,
       alreadyApplied: false,
     });
@@ -71,22 +94,25 @@ describe("AssistantWidget", () => {
     render(<MemoryRouter initialEntries={["/expenses"]}><AssistantWidget /></MemoryRouter>);
     fireEvent.click(screen.getByRole("button", { name: "Mở trợ lý tài chính" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Nhắn cho trợ lý" }), {
-      target: { value: "50k ăn sáng" },
+      target: { value: "50k ăn sáng và 45k kem đánh răng" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Gửi tin nhắn" }));
 
-    expect(await screen.findByText("Mình đã chuẩn bị khoản chi. Hãy kiểm tra rồi xác nhận.")).toBeVisible();
+    expect(await screen.findByText("Mình đã chuẩn bị 2 khoản chi. Hãy kiểm tra rồi xác nhận.")).toBeVisible();
+    expect(screen.getByText("2 thao tác")).toBeVisible();
     expect(screen.getByText("50,000đ")).toBeVisible();
+    expect(screen.getByText("45,000đ")).toBeVisible();
     expect(screen.getByText("Danh mục và tài khoản")).toBeVisible();
     expect(confirm).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Xác nhận" }));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith("signed-token"));
     expect(applyAssistantConfirmation).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "create_transaction",
+      kind: "action_batch",
+      results: expect.arrayContaining([expect.objectContaining({ kind: "create_transaction" })]),
       workspaceRevision: 2,
     }));
-    expect(await screen.findByText("Đã ghi khoản thu chi thành công.")).toBeVisible();
+    expect(await screen.findByText("Đã ghi 2 thao tác thành công (2 khoản thu/chi, 0 lần trích quỹ).")).toBeVisible();
     expect(screen.getByText("Đã xác nhận")).toBeVisible();
   });
 

@@ -19,7 +19,11 @@ import type {
 } from "@chi-tieu/shared";
 import type { FinanceDatabase } from "./client.js";
 import * as schema from "./schema.js";
-import type { PersonalMutationCommand, SharedMutationCommand } from "../lib/repository.js";
+import type {
+  AssistantMutationCommand,
+  PersonalMutationCommand,
+  SharedMutationCommand,
+} from "../lib/repository.js";
 import { SharedFundError } from "../lib/repository.js";
 
 type Executor = Parameters<Parameters<FinanceDatabase["transaction"]>[0]>[0];
@@ -1117,6 +1121,35 @@ export async function mutatePersonalResource<T>(
   command: PersonalMutationCommand,
 ): Promise<PersonalMutationResponse<T>> {
   return mutatePersonalResourceWithResult<T, T>(db, userId, expectedRevision, command, async (_tx, data) => data);
+}
+
+export async function mutatePersonalResources<T>(
+  db: FinanceDatabase,
+  userId: string,
+  expectedRevision: number,
+  commands: AssistantMutationCommand[],
+): Promise<PersonalMutationResponse<T[]>> {
+  if (!commands.length) throw new SharedFundError("invalid_request", 400, "Batch mutation không được để trống.");
+  return db.transaction(async (tx) => {
+    const lockResult: any = await tx.execute(sql`
+      select workspace_revision from users where id = ${userId} for update
+    `);
+    const current = Number((lockResult.rows?.[0] ?? lockResult[0])?.workspace_revision);
+    if (!current) throw new Error("Không tìm thấy dữ liệu tài khoản.");
+    if (current !== expectedRevision) {
+      throw new SharedFundError("revision_conflict", 409, "Dữ liệu đã được cập nhật ở nơi khác. Hãy tải lại.");
+    }
+    const data: T[] = [];
+    for (const command of commands) {
+      data.push(await runCommand(tx, userId, command) as T);
+    }
+    const workspaceRevision = current + 1;
+    await tx.update(schema.users).set({
+      workspaceRevision,
+      updatedAt: new Date(),
+    }).where(eq(schema.users.id, userId));
+    return { data, workspaceRevision };
+  });
 }
 
 /**

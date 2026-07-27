@@ -69,6 +69,10 @@ export type TransactionMutationCommand = Extract<PersonalMutationCommand, {
   kind: "createTransaction" | "updateTransaction" | "deleteTransaction";
 }>;
 
+export type AssistantMutationCommand = Extract<PersonalMutationCommand, {
+  kind: "createTransaction" | "fundMonth";
+}>;
+
 export type SharedMutationCommand =
   | {
     kind: "metadata";
@@ -117,6 +121,11 @@ export interface UserDataRepository {
     expectedRevision: number,
     command: PersonalMutationCommand,
   ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<T>>;
+  mutatePersonalResources<T = unknown>(
+    userId: string,
+    expectedRevision: number,
+    commands: AssistantMutationCommand[],
+  ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<T[]>>;
   mutateSharedResource<T = unknown>(
     userId: string,
     fundId: string,

@@ -101,8 +101,10 @@ test("chuyển tháng năm và CRUD quỹ, danh mục", async ({ page }, testInf
   await page.getByRole("link", { name: "Chi tiêu" }).click();
   await page.getByRole("button", { name: /Quản lý danh mục/ }).click();
   const categoryDialog = page.getByRole("dialog", { name: "Quản lý danh mục" });
+  const initialCategoryCount = await categoryDialog.locator(".manager-row.category-row").count();
   await categoryDialog.getByPlaceholder("Tên danh mục mới").fill("Danh mục kiểm thử");
   await categoryDialog.getByRole("button", { name: "+ Thêm", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Đã lưu");
   const categoryRow = categoryDialog.locator(".manager-row.category-row").last();
   const categoryName = categoryRow.locator("input").nth(1);
   await expect(categoryName).toHaveValue("Danh mục kiểm thử");
@@ -111,7 +113,7 @@ test("chuyển tháng năm và CRUD quỹ, danh mục", async ({ page }, testInf
   await expect(categoryName).toHaveValue("Danh mục đã đổi");
   await expect(page.getByRole("status")).toContainText("Đã lưu");
   await categoryRow.getByRole("button", { name: "Xóa" }).click();
-  await expect(categoryDialog.locator(".manager-row.category-row")).toHaveCount(1);
+  await expect(categoryDialog.locator(".manager-row.category-row")).toHaveCount(initialCategoryCount);
 });
 
 test("quản lý tài khoản và gán tài khoản cho giao dịch", async ({ page }, testInfo) => {
@@ -196,7 +198,7 @@ test("xuất file và nhập lại bản sao lưu", async ({ page }, testInfo) =
   const backupDialog = page.getByRole("dialog", { name: "Sao lưu dữ liệu" });
   const content = await backupDialog.getByLabel("Nội dung sao lưu").inputValue();
   const downloadPromise = page.waitForEvent("download");
-  await backupDialog.getByRole("button", { name: /Tải file \.json/ }).click();
+  await backupDialog.getByRole("button", { name: "Tải bản sao lưu" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^quy-tai-chinh-\d{4}-\d{2}-\d{2}\.json$/);
   await page.keyboard.press("Escape");

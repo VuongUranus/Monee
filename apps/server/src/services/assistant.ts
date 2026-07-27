@@ -112,27 +112,37 @@ export const ASSISTANT_FUNCTIONS: FunctionDeclaration[] = [
     parametersJsonSchema: objectSchema({}),
   },
   {
-    name: "propose_transaction",
-    description: "Tạo đúng một bản xem trước giao dịch. Không ghi dữ liệu. Chỉ gọi khi mọi trường bắt buộc đã rõ.",
+    name: "propose_finance_batch",
+    description: "Tạo một bản xem trước nguyên tử gồm 1-10 khoản thu/chi và trích quỹ. Không ghi dữ liệu. Phải chứa đủ mọi thao tác người dùng yêu cầu và chỉ gọi khi tất cả đều rõ.",
     parametersJsonSchema: objectSchema({
-      date: stringSchema("Ngày YYYY-MM-DD."),
-      type: { type: "string", enum: ["income", "expense"] },
-      categoryId: stringSchema("ID danh mục hợp lệ lấy từ get_expense_config."),
-      accountId: stringSchema("ID tài khoản hợp lệ; bỏ qua nếu người dùng không nêu."),
-      amount: numberSchema("Số tiền VND nguyên dương."),
-      note: stringSchema("Ghi chú ngắn mô tả khoản thu/chi."),
-    }, ["date", "type", "categoryId", "amount", "note"]),
-  },
-  {
-    name: "propose_fund_allocation",
-    description: "Tạo đúng một bản xem trước trích quỹ cá nhân loại saving. Không ghi dữ liệu.",
-    parametersJsonSchema: objectSchema({
-      fundId: stringSchema("ID quỹ lấy từ get_fund_overview."),
-      year: { type: "integer" },
-      month: { type: "integer", minimum: 1, maximum: 12 },
-      operation: { type: "string", enum: ["increment", "set"] },
-      amount: numberSchema("Số tiền VND nguyên dương. increment là cộng thêm, set là đặt tổng."),
-    }, ["fundId", "year", "month", "operation", "amount"]),
+      transactions: {
+        type: "array",
+        maxItems: 10,
+        description: "Các khoản thu/chi, để [] nếu không có.",
+        items: objectSchema({
+          position: { type: "integer", minimum: 0, description: "Thứ tự xuất hiện trong câu, bắt đầu từ 0." },
+          date: stringSchema("Ngày YYYY-MM-DD."),
+          type: { type: "string", enum: ["income", "expense"] },
+          categoryId: stringSchema("ID danh mục hợp lệ lấy từ get_expense_config."),
+          accountId: stringSchema("ID tài khoản hợp lệ; bỏ qua nếu người dùng không nêu."),
+          amount: numberSchema("Số tiền VND nguyên dương."),
+          note: stringSchema("Ghi chú ngắn mô tả khoản thu/chi."),
+        }, ["position", "date", "type", "categoryId", "amount", "note"]),
+      },
+      fundAllocations: {
+        type: "array",
+        maxItems: 10,
+        description: "Các lần trích quỹ, để [] nếu không có.",
+        items: objectSchema({
+          position: { type: "integer", minimum: 0, description: "Thứ tự xuất hiện trong câu, bắt đầu từ 0." },
+          fundId: stringSchema("ID quỹ lấy từ get_fund_overview."),
+          year: { type: "integer" },
+          month: { type: "integer", minimum: 1, maximum: 12 },
+          operation: { type: "string", enum: ["increment", "set"] },
+          amount: numberSchema("Số tiền VND nguyên dương. increment là cộng thêm, set là đặt tổng."),
+        }, ["position", "fundId", "year", "month", "operation", "amount"]),
+      },
+    }, ["transactions", "fundAllocations"]),
   },
 ];
 
@@ -206,7 +216,7 @@ export function createGeminiAssistantService({
               config: {
                 systemInstruction: input.systemInstruction,
                 temperature: 0.2,
-                maxOutputTokens: 1_200,
+                maxOutputTokens: 3_000,
                 abortSignal: controller.signal,
                 tools: [{ functionDeclarations: ASSISTANT_FUNCTIONS }],
               },

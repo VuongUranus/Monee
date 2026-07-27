@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -111,6 +112,54 @@ describe("PostgreSQL repository", () => {
       "different.json",
     )).rejects.toThrow("từ chối ghi đè");
   });
+
+  it("rollback toàn bộ batch khi một lệnh phía sau không hợp lệ", async () => {
+    await postgres.reset();
+    const initial = createDefaultStore();
+    initial.expense.cats = [{ id: "food", name: "Ăn uống", color: "#E4572E", budget: 5_000_000 }];
+    initial.expense.txns = [];
+    await seedUser(postgres, profile, initial as unknown as StoredFinancePayload);
+    const before = await postgres.repository.getBootstrap(profile.sub);
+    await expect(postgres.repository.mutatePersonalResources(
+      profile.sub,
+      before.workspaceRevision,
+      [
+        {
+          kind: "createTransaction",
+          transaction: {
+            id: "4a14a27e-c30d-437b-a918-53c1db4e0712",
+            date: "2026-07-27",
+            type: "expense",
+            cat: "food",
+            amount: 30_000,
+            note: "Ăn sáng",
+          },
+        },
+        {
+          kind: "createTransaction",
+          transaction: {
+            id: "76258b67-a79c-413c-93f2-cf5bb6fe874c",
+            date: "2026-07-27",
+            type: "expense",
+            cat: "missing-category",
+            amount: 45_000,
+            note: "Kem đánh răng",
+          },
+        },
+      ],
+    )).rejects.toMatchObject({ code: "category_not_found" });
+    const [transactions, after] = await Promise.all([
+      postgres.repository.getTransactions(profile.sub, {
+        from: "2026-07-01",
+        to: "2026-07-31",
+        page: 1,
+        pageSize: 10,
+      }),
+      postgres.repository.getBootstrap(profile.sub),
+    ]);
+    expect(transactions.total).toBe(0);
+    expect(after.workspaceRevision).toBe(before.workspaceRevision);
+  });
 });
 
 describe("Fastify CRUD, sharing và market routes", () => {
@@ -158,7 +207,7 @@ describe("Fastify CRUD, sharing và market routes", () => {
       });
       expect(response.statusCode).toBe(200);
       const overview = response.json();
-      expect(overview).toMatchObject({ year: 2026, month: 7, yearActiveMonths: 2, allTimeActiveMonths: 3 });
+      expect(overview).toMatchObject({ year: 2026, month: 7, yearActiveMonths: 2, allTimeActiveMonths: 4 });
       expect(overview.funds).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: "reserve", yearTotal: 200, allTimeTotal: 300 }),
         expect.objectContaining({ id: "stocks", yearTotal: 500, allTimeTotal: 900 }),
@@ -915,7 +964,10 @@ describe("Trợ lý tài chính AI", () => {
       details: { reserve: new Array(12).fill(null) },
       notes: new Array(12).fill(""),
     };
-    initial.expense.cats = [{ id: "food", name: "Ăn uống", color: "#E4572E", budget: 5_000_000 }];
+    initial.expense.cats = [
+      { id: "food", name: "Ăn uống", color: "#E4572E", budget: 5_000_000 },
+      { id: "household", name: "Đồ dùng", color: "#3B82F6", budget: 2_000_000 },
+    ];
     initial.expense.incomeCats = [{ id: "salary", name: "Lương", color: "#4C9F70" }];
     initial.expense.accountTypes = [];
     initial.expense.accounts = [];
@@ -923,22 +975,46 @@ describe("Trợ lý tài chính AI", () => {
     return initial;
   }
 
-  it("chỉ ghi giao dịch sau xác nhận và xác nhận lại là idempotent", async () => {
+  it("ghi nguyên tử nhiều giao dịch và trích quỹ, chỉ tăng revision một lần và retry idempotent", async () => {
     const assistantService: AssistantService = {
       async generate(input) {
         const config = await input.executeTool("get_expense_config", {}) as {
           categories: Array<{ id: string }>;
         };
-        await input.executeTool("propose_transaction", {
-          date: "2026-07-27",
-          type: "expense",
-          categoryId: config.categories[0]!.id,
-          amount: 50_000,
-          note: "Ăn sáng",
+        const overview = await input.executeTool("get_fund_overview", { year: 2026, month: 7 }) as {
+          funds: Array<{ id: string }>;
+        };
+        await input.executeTool("propose_finance_batch", {
+          transactions: [
+            {
+              position: 0,
+              date: "2026-07-27",
+              type: "expense",
+              categoryId: config.categories[0]!.id,
+              amount: 30_000,
+              note: "Ăn sáng",
+            },
+            {
+              position: 1,
+              date: "2026-07-27",
+              type: "expense",
+              categoryId: config.categories[1]!.id,
+              amount: 45_000,
+              note: "Kem đánh răng",
+            },
+          ],
+          fundAllocations: [{
+            position: 2,
+            fundId: overview.funds[0]!.id,
+            year: 2026,
+            month: 7,
+            operation: "increment",
+            amount: 2_000_000,
+          }],
         });
         return {
-          reply: "Mình đã chuẩn bị khoản chi. Hãy bấm Xác nhận.",
-          toolNames: ["get_expense_config", "propose_transaction"],
+          reply: "Mình đã chuẩn bị 3 thao tác. Hãy bấm Xác nhận.",
+          toolNames: ["get_expense_config", "get_fund_overview", "propose_finance_batch"],
           inputTokens: 20,
           outputTokens: 10,
         };
@@ -956,7 +1032,7 @@ describe("Trợ lý tài chính AI", () => {
         url: "/api/assistant/messages",
         headers: { cookie },
         payload: {
-          message: "50k ăn sáng",
+          message: "30k ăn sáng, 45k kem đánh răng và trích 2 triệu vào quỹ dự phòng",
           history: [],
           context: { route: "expenses", selectedYear: 2026, selectedMonth: 7 },
         },
@@ -964,9 +1040,13 @@ describe("Trợ lý tài chính AI", () => {
       expect(message.statusCode).toBe(200);
       const proposal = message.json().proposal;
       expect(proposal).toMatchObject({
-        kind: "create_transaction",
-        categoryName: "Ăn uống",
-        transaction: { amount: 50_000, note: "Ăn sáng" },
+        kind: "action_batch",
+        expectedRevision: bootstrap.json().workspaceRevision,
+        actions: [
+          { kind: "create_transaction", categoryName: "Ăn uống", transaction: { amount: 30_000 } },
+          { kind: "create_transaction", categoryName: "Đồ dùng", transaction: { amount: 45_000 } },
+          { kind: "allocate_fund", previousAmount: 100_000, nextAmount: 2_100_000 },
+        ],
       });
       const before = await app.inject({
         method: "GET",
@@ -975,7 +1055,9 @@ describe("Trợ lý tài chính AI", () => {
       });
       expect(before.json().total).toBe(0);
 
-      const invalidToken = `${proposal.confirmationToken.slice(0, -1)}x`;
+      const [tokenBody, tokenSignature] = proposal.confirmationToken.split(".");
+      const invalidSignature = `${tokenSignature![0] === "a" ? "b" : "a"}${tokenSignature!.slice(1)}`;
+      const invalidToken = `${tokenBody}.${invalidSignature}`;
       const rejected = await app.inject({
         method: "POST",
         url: "/api/assistant/actions/confirm",
@@ -992,9 +1074,14 @@ describe("Trợ lý tài chính AI", () => {
       });
       expect(first.statusCode).toBe(200);
       expect(first.json()).toMatchObject({
-        kind: "create_transaction",
+        kind: "action_batch",
         alreadyApplied: false,
-        transaction: { amount: 50_000 },
+        workspaceRevision: bootstrap.json().workspaceRevision + 1,
+        results: [
+          { kind: "create_transaction", transaction: { amount: 30_000 } },
+          { kind: "create_transaction", transaction: { amount: 45_000 } },
+          { kind: "allocate_fund", fund: { amount: 2_100_000 } },
+        ],
       });
       const second = await app.inject({
         method: "POST",
@@ -1009,28 +1096,56 @@ describe("Trợ lý tài chính AI", () => {
         url: "/api/transactions?from=2026-07-01&to=2026-07-31&page=1&pageSize=10",
         headers: { cookie },
       });
-      expect(after.json()).toMatchObject({ total: 1, items: [{ amount: 50_000, note: "Ăn sáng" }] });
+      expect(after.json()).toMatchObject({
+        total: 2,
+        items: expect.arrayContaining([
+          expect.objectContaining({ amount: 30_000, note: "Ăn sáng" }),
+          expect.objectContaining({ amount: 45_000, note: "Kem đánh răng" }),
+        ]),
+      });
+      const fundAfter = await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie },
+      });
+      expect(fundAfter.json().funds).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "reserve", monthAmount: 2_100_000 }),
+      ]));
     } finally {
       await app.close();
     }
   });
 
-  it("cộng tiền vào quỹ cá nhân và phát hiện bản xem trước đã cũ", async () => {
+  it("tính tuần tự nhiều lần trích vào cùng quỹ và phát hiện preview đã cũ", async () => {
     const assistantService: AssistantService = {
       async generate(input) {
         const overview = await input.executeTool("get_fund_overview", { year: 2026, month: 7 }) as {
           funds: Array<{ id: string }>;
         };
-        await input.executeTool("propose_fund_allocation", {
-          fundId: overview.funds[0]!.id,
-          year: 2026,
-          month: 7,
-          operation: "increment",
-          amount: 2_000_000,
+        await input.executeTool("propose_finance_batch", {
+          transactions: [],
+          fundAllocations: [
+            {
+              position: 0,
+              fundId: overview.funds[0]!.id,
+              year: 2026,
+              month: 7,
+              operation: "increment",
+              amount: 2_000_000,
+            },
+            {
+              position: 1,
+              fundId: overview.funds[0]!.id,
+              year: 2026,
+              month: 7,
+              operation: "increment",
+              amount: 500_000,
+            },
+          ],
         });
         return {
-          reply: "Mình đã chuẩn bị lần trích quỹ. Hãy bấm Xác nhận.",
-          toolNames: ["get_fund_overview", "propose_fund_allocation"],
+          reply: "Mình đã chuẩn bị hai lần trích quỹ. Hãy bấm Xác nhận.",
+          toolNames: ["get_fund_overview", "propose_finance_batch"],
           inputTokens: 20,
           outputTokens: 10,
         };
@@ -1054,30 +1169,181 @@ describe("Trợ lý tài chính AI", () => {
       expect(message.statusCode).toBe(200);
       const proposal = message.json().proposal;
       expect(proposal).toMatchObject({
-        kind: "allocate_fund",
-        previousAmount: 100_000,
-        nextAmount: 2_100_000,
+        kind: "action_batch",
+        actions: [
+          { previousAmount: 100_000, nextAmount: 2_100_000 },
+          { previousAmount: 2_100_000, nextAmount: 2_600_000 },
+        ],
       });
+      await app.finance.repository.mutatePersonalResource(
+        profile.sub,
+        proposal.expectedRevision,
+        { kind: "monthNote", year: 2026, month: 7, note: "Thay đổi song song" },
+      );
       const confirmed = await app.inject({
         method: "POST",
         url: "/api/assistant/actions/confirm",
         headers: { cookie },
         payload: { confirmationToken: proposal.confirmationToken },
       });
-      expect(confirmed.statusCode).toBe(200);
-      expect(confirmed.json()).toMatchObject({
-        kind: "allocate_fund",
-        alreadyApplied: false,
-        fund: { amount: 2_100_000 },
+      expect(confirmed.statusCode).toBe(409);
+      expect(confirmed.json()).toMatchObject({ error: "revision_conflict" });
+      const fundAfter = await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie },
       });
-      const repeated = await app.inject({
+      expect(fundAfter.json().funds).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "reserve", monthAmount: 100_000 }),
+      ]));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("chấp nhận 10 thao tác và không tạo preview khi vượt giới hạn hoặc có một khoản không hợp lệ", async () => {
+    const toolErrors: string[] = [];
+    const assistantService: AssistantService = {
+      async generate(input) {
+        const config = await input.executeTool("get_expense_config", {}) as {
+          categories: Array<{ id: string }>;
+        };
+        const batchSize = input.message.includes("11 khoản") ? 11
+          : input.message.includes("10 khoản") ? 10
+            : 0;
+        const transactions = batchSize
+          ? Array.from({ length: batchSize }, (_, position) => ({
+            position,
+            date: "2026-07-27",
+            type: "expense",
+            categoryId: config.categories[0]!.id,
+            amount: 10_000,
+            note: `Khoản ${position + 1}`,
+          }))
+          : [
+            {
+              position: 0,
+              date: "2026-07-27",
+              type: "expense",
+              categoryId: config.categories[0]!.id,
+              amount: 30_000,
+              note: "Ăn sáng",
+            },
+            {
+              position: 1,
+              date: "2026-07-27",
+              type: "expense",
+              categoryId: "missing-category",
+              amount: 45_000,
+              note: "Khoản chưa rõ",
+            },
+          ];
+        try {
+          await input.executeTool("propose_finance_batch", { transactions, fundAllocations: [] });
+        } catch (error) {
+          toolErrors.push(error instanceof Error ? error.message : String(error));
+        }
+        return {
+          reply: "Mình cần bạn chia nhỏ hoặc làm rõ các khoản trước khi tạo bản xem trước.",
+          toolNames: ["get_expense_config", "propose_finance_batch"],
+          inputTokens: 20,
+          outputTokens: 10,
+        };
+      },
+    };
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: assistantFixture() as unknown as StoredFinancePayload,
+      assistantService,
+    });
+    try {
+      const accepted = await app.inject({
+        method: "POST",
+        url: "/api/assistant/messages",
+        headers: { cookie },
+        payload: {
+          message: "Tạo 10 khoản",
+          history: [],
+          context: { route: "expenses", selectedYear: 2026, selectedMonth: 7 },
+        },
+      });
+      expect(accepted.statusCode).toBe(200);
+      expect(accepted.json().proposal.actions).toHaveLength(10);
+      for (const message of ["Tạo 11 khoản", "30k ăn sáng và một khoản chưa rõ"]) {
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/assistant/messages",
+          headers: { cookie },
+          payload: {
+            message,
+            history: [],
+            context: { route: "expenses", selectedYear: 2026, selectedMonth: 7 },
+          },
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).not.toHaveProperty("proposal");
+      }
+      expect(toolErrors).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("chấp nhận token proposal v1 còn hạn như batch một phần tử", async () => {
+    const assistantService: AssistantService = {
+      async generate() {
+        return {
+          reply: "Không dùng trong test này.",
+          toolNames: [],
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+      },
+    };
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: assistantFixture() as unknown as StoredFinancePayload,
+      assistantService,
+    });
+    try {
+      const bootstrap = await app.inject({ method: "GET", url: "/api/data", headers: { cookie } });
+      const actionId = crypto.randomUUID();
+      const issuedAt = Date.now();
+      const body = Buffer.from(JSON.stringify({
+        version: 1,
+        userId: profile.sub,
+        issuedAt,
+        expiresAt: issuedAt + 10 * 60_000,
+        action: {
+          kind: "create_transaction",
+          actionId,
+          expectedRevision: bootstrap.json().workspaceRevision,
+          transaction: {
+            id: actionId,
+            date: "2026-07-27",
+            type: "expense",
+            cat: "food",
+            amount: 30_000,
+            note: "Token cũ",
+          },
+          categoryName: "Ăn uống",
+        },
+      })).toString("base64url");
+      const signature = crypto.createHmac(
+        "sha256",
+        "integration-session-secret-at-least-twenty-bytes",
+      ).update(body).digest("base64url");
+      const confirmed = await app.inject({
         method: "POST",
         url: "/api/assistant/actions/confirm",
         headers: { cookie },
-        payload: { confirmationToken: proposal.confirmationToken },
+        payload: { confirmationToken: `${body}.${signature}` },
       });
-      expect(repeated.statusCode).toBe(200);
-      expect(repeated.json()).toMatchObject({ alreadyApplied: true });
+      expect(confirmed.statusCode).toBe(200);
+      expect(confirmed.json()).toMatchObject({
+        kind: "action_batch",
+        batchId: actionId,
+        alreadyApplied: false,
+        results: [{ kind: "create_transaction", transaction: { note: "Token cũ" } }],
+      });
     } finally {
       await app.close();
     }
