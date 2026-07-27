@@ -27,3 +27,7 @@ try {
   app.log.error(error);
   process.exitCode = 1;
 }
+
+// Vercel's Node.js runtime accepts a native HTTP server as a Function export.
+// Keep the listener above for normal Fastify deployments and local production.
+export default app.server;
