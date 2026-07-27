@@ -223,7 +223,7 @@ export function AssistantWidget() {
       <aside className={`assistant-panel ${open ? "is-open" : ""}`} role="dialog" aria-modal="false" aria-label="Trợ lý tài chính">
         <header className="assistant-head">
           <div>
-            <p className="eyebrow">Gemini AI</p>
+            <p className="eyebrow">Monee AI</p>
             <h2>Trợ lý tài chính</h2>
           </div>
           <button className="icon-btn" type="button" aria-label="Đóng trợ lý" onClick={() => setOpen(false)}>×</button>
