@@ -10,7 +10,7 @@ import "./context.js";
 import { createConfig, type AppEnvironment } from "./lib/config.js";
 import { SharedFundError, type UserDataRepository } from "./lib/repository.js";
 import { PostgresUserRepository } from "./lib/postgres-repository.js";
-import { createDatabaseClient } from "./db/client.js";
+import { createDatabaseClient, type FinanceDatabase } from "./db/client.js";
 import { SessionManager } from "./lib/session.js";
 import { createMarketService, type FetchLike, type MarketService } from "./services/market.js";
 import { authRoutes } from "./routes/auth.js";
@@ -41,6 +41,7 @@ export interface BuildAppOptions {
   fetchImpl?: FetchLike;
   marketService?: MarketService;
   repository?: UserDataRepository;
+  database?: FinanceDatabase;
   now?: () => number;
   randomBytes?: (size: number) => Buffer;
   logger?: FastifyServerOptions["logger"];
@@ -60,12 +61,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const now = options.now ?? (() => Date.now());
   const randomBytes = options.randomBytes ?? crypto.randomBytes;
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as FetchLike);
-  const databaseClient = options.repository ? null : (() => {
-    if (!config.databaseUrl) throw new Error("DATABASE_URL là bắt buộc khi không truyền repository.");
+  const databaseClient = options.repository || options.database ? null : (() => {
+    if (!config.databaseUrl) throw new Error("DATABASE_URL là bắt buộc khi không truyền repository hoặc database.");
     return createDatabaseClient(config.databaseUrl);
   })();
+  const database = options.database ?? databaseClient?.db;
+  if (!database) throw new Error("database là bắt buộc khi truyền repository tùy chỉnh.");
   const repository = options.repository ?? new PostgresUserRepository({
-    db: databaseClient!.db,
+    db: database,
     now,
     randomBytes,
   });
@@ -85,7 +88,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       };
     },
   }) as UserDataRepository;
-  const sessions = new SessionManager({ config, now, randomBytes });
+  const sessions = new SessionManager({ config, db: database, now, randomBytes });
   const marketService = options.marketService ?? createMarketService({ fetchImpl, now });
   const app = options.app ?? Fastify({
     logger: options.logger ?? false,
@@ -113,6 +116,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.addHook("onRequest", (request, _reply, done) => {
     requestStartedAt.set(request, performance.now());
     requestMetrics.run({ dbDurationMs: 0 }, done);
+  });
+  app.addHook("onRequest", async (request) => {
+    await sessions.authenticate(request);
   });
   app.addHook("onSend", async (request, reply, payload) => {
     if (request.url.startsWith("/api/")) {

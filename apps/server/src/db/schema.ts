@@ -35,6 +35,25 @@ export const users = pgTable("users", {
   check("users_workspace_revision_positive", sql`${table.workspaceRevision} > 0`),
 ]);
 
+export const authSessions = pgTable("auth_sessions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: createdAt(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("auth_sessions_expires_idx").on(table.expiresAt),
+  index("auth_sessions_user_idx").on(table.userId),
+]);
+
+export const oauthLoginStates = pgTable("oauth_login_states", {
+  state: text("state").primaryKey(),
+  verifier: text("verifier").notNull(),
+  returnTo: text("return_to").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("oauth_login_states_expires_idx").on(table.expiresAt),
+]);
+
 export const userSettings = pgTable("user_settings", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   showGoals: boolean("show_goals").notNull().default(false),

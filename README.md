@@ -125,4 +125,4 @@ Integration test tạo PostgreSQL thật bằng Testcontainers (hoặc dùng `TE
 npx playwright install chromium
 ```
 
-Session OAuth vẫn ở memory, nên người dùng đăng nhập lại sau khi server restart. Giới hạn body API là 5 MiB.
+Session đăng nhập và OAuth state/PKCE được lưu trong PostgreSQL, nên server restart không làm client phải đăng nhập lại (trong thời hạn session 7 ngày). `SESSION_SECRET` phải giữ nguyên giữa các lần restart/deploy; thay đổi secret sẽ vô hiệu hóa cookie session hiện có. Giới hạn body API là 5 MiB.

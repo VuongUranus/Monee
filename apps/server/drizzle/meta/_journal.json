@@ -36,6 +36,13 @@
       "when": 1785092765738,
       "tag": "0004_wide_slyde",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785132908765,
+      "tag": "0005_curvy_chimera",
+      "breakpoints": true
     }
   ]
 }

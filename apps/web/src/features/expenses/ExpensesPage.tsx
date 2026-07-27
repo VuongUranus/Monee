@@ -35,6 +35,7 @@ export function ExpensesPage() {
   const ledger = useFinanceStore((state) => state.ledger);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
+  const periodReady = useFinanceStore((state) => state.periodReady);
   const expenseSummary = useFinanceStore((state) => state.expenseSummary);
   const transactionPage = useFinanceStore((state) => state.transactionPage);
   const loadExpenses = useFinanceStore((state) => state.loadExpenses);
@@ -70,8 +71,8 @@ export function ExpensesPage() {
   }, [filters]);
 
   useEffect(() => {
-    void loadExpenses();
-  }, [loadExpenses, month, year]);
+    if (periodReady) void loadExpenses();
+  }, [loadExpenses, month, periodReady, year]);
 
   useEffect(() => {
     if (!expenseSummary || expenseSummary.year !== year || expenseSummary.month !== month + 1) return;

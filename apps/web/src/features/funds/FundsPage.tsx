@@ -4,10 +4,12 @@ import type {
   Fund,
   FundCategory,
   FundDetail,
+  FundMonthDetailResponse,
   GoldDetail,
   GoldLot,
   HoldingDetail,
   HoldingLot,
+  MarketAssetRequest,
   FundOverviewItem,
   SharedFundContributionsResponse,
   SharedFundMembersResponse,
@@ -44,6 +46,68 @@ function liveAllTimeTotal(overview: FundOverviewItem | undefined, yearTotal: num
   return overview.allTimeTotal + yearTotal - overview.yearTotal;
 }
 
+function addMarketAssetsFromDetail(state: any, fundId: string, detail: FundDetail): void {
+  if (!detail || !state.fundOverview) return;
+  const category = state.ledger.funds.find((fund: Fund) => fund.id === fundId)?.cat;
+  if (category !== "gold" && category !== "stock" && category !== "crypto") return;
+  const assets = new Map<string, MarketAssetRequest>(state.fundOverview.marketAssets.map((asset: MarketAssetRequest) => [JSON.stringify(asset), asset]));
+  if (category === "gold") {
+    assets.set("gold", { type: "gold" });
+  } else if (detail.type === "hold") {
+    for (const lot of detail.lots) {
+      const symbol = lot.ticker.trim().toUpperCase();
+      if (!symbol) continue;
+      const asset: MarketAssetRequest = category === "stock"
+        ? { type: "stock", symbol, ...(lot.exchange ? { exchange: lot.exchange } : {}) }
+        : { type: "crypto", symbol, ...(lot.providerId ? { providerId: lot.providerId } : {}) };
+      assets.set(JSON.stringify(asset), asset);
+    }
+  }
+  state.fundOverview.marketAssets = [...assets.values()];
+}
+
+function reconcileFundMonth(
+  state: any,
+  result: FundMonthDetailResponse,
+  includeDetail: boolean,
+): void {
+  const overview = state.fundOverview;
+  if (overview?.year === result.year) {
+    const fund = overview.funds.find((item: FundOverviewItem) => item.id === result.fundId);
+    const monthIndex = result.month - 1;
+    if (fund) {
+      const previous = fund.yearAmounts[monthIndex] ?? 0;
+      const beforePeriodTotal = overview.funds.reduce((sum: number, item: FundOverviewItem) =>
+        sum + (item.yearAmounts[monthIndex] ?? 0), 0);
+      fund.yearAmounts[monthIndex] = result.amount;
+      if (overview.month === result.month) fund.monthAmount = result.amount;
+      fund.yearTotal += result.amount - previous;
+      fund.allTimeTotal += result.amount - previous;
+      const afterPeriodTotal = beforePeriodTotal - previous + result.amount;
+      if (beforePeriodTotal === 0 && afterPeriodTotal > 0) {
+        overview.yearActiveMonths += 1;
+        overview.allTimeActiveMonths += 1;
+      } else if (beforePeriodTotal > 0 && afterPeriodTotal === 0) {
+        overview.yearActiveMonths -= 1;
+        overview.allTimeActiveMonths -= 1;
+      }
+    }
+  }
+  const shared = state.sharedFunds[result.fundId];
+  if (shared) {
+    const sharedYear = shared.content.years[String(result.year)] ?? {
+      funds: new Array<number>(12).fill(0),
+      details: new Array<FundDetail>(12).fill(null),
+    };
+    sharedYear.funds[result.month - 1] = result.amount;
+    if (includeDetail) sharedYear.details[result.month - 1] = structuredClone(result.detail);
+    shared.content.years[String(result.year)] = sharedYear;
+  }
+  if (!includeDetail) return;
+  state.fundDetails[`${result.fundId}:${result.year}:${result.month}`] = structuredClone(result);
+  addMarketAssetsFromDetail(state, result.fundId, result.detail);
+}
+
 export function FundsPage() {
   const ledger = useFinanceStore((state) => state.ledger);
   const fundOverview = useFinanceStore((state) => state.fundOverview);
@@ -51,6 +115,7 @@ export function FundsPage() {
   const loadFundDetail = useFinanceStore((state) => state.loadFundDetail);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
+  const periodReady = useFinanceStore((state) => state.periodReady);
   const marketState = useFinanceStore((state) => state.marketState);
   const marketMessage = useFinanceStore((state) => state.marketMessage);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
@@ -65,8 +130,8 @@ export function FundsPage() {
   const contributionMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
 
   useEffect(() => {
-    void loadFunds();
-  }, [loadFunds, month, year]);
+    if (periodReady) void loadFunds();
+  }, [loadFunds, month, periodReady, year]);
 
   const yearData = ledger.years[String(year)] ?? {
     income: new Array<number>(12).fill(0),
@@ -179,13 +244,20 @@ export function FundsPage() {
                             value={value}
                             ariaLabel={`Số tiền ${fund.name}`}
                             onCommit={(amount) => {
+                              if (amount === value) return;
                               const mutate = (draft: any): void => { draft.years[String(year)]!.funds[fund.id]![month] = amount; };
                               if (fund.sharing) {
                                 void mutateSharedLedger(fund.id, mutate, (revision) =>
-                                  api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount }))
+                                  api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount }), {
+                                  refresh: "none",
+                                  reconcile: (state, result) => reconcileFundMonth(state, result, false),
+                                })
                                   .catch(() => undefined);
                               } else {
-                                mutateLedger(mutate, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount }, expectedRevision));
+                                mutateLedger(mutate, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount }, expectedRevision), {
+                                  refresh: "none",
+                                  reconcile: (state, result) => reconcileFundMonth(state, result, false),
+                                });
                               }
                             }}
                           />
@@ -221,6 +293,14 @@ export function FundsPage() {
               onBlur={() => mutateLedger(
                 () => undefined,
                 (expectedRevision) => api.updateMonthNote(year, month + 1, useFinanceStore.getState().ledger.years[String(year)]!.notes[month] ?? "", expectedRevision),
+                {
+                  refresh: "none",
+                  reconcile: (state, result) => {
+                    if (state.fundOverview?.year === result.year && state.fundOverview.month === result.month) {
+                      state.fundOverview.note = result.note;
+                    }
+                  },
+                },
               )}
             />
           </label>
@@ -261,7 +341,12 @@ export function FundsPage() {
             checked={ledger.showGoals}
             onChange={(event) => {
               const showGoals = event.target.checked;
-              mutateLedger((draft) => { draft.showGoals = showGoals; }, (expectedRevision) => api.updatePreferences(expectedRevision, { showGoals }));
+              mutateLedger((draft) => { draft.showGoals = showGoals; }, (expectedRevision) => api.updatePreferences(expectedRevision, { showGoals }), {
+                refresh: "none",
+                reconcile: (state, result) => {
+                  if (state.fundOverview) state.fundOverview.showGoals = result.showGoals;
+                },
+              });
             }}
           />
           Hiện mục tiêu
@@ -296,12 +381,27 @@ function GoalsTable() {
   const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
   const yearData = ledger.years[String(year)];
   const saveGoal = (fund: Fund, goalYear: number | null, value: number, recipe: (draft: any) => void): void => {
+    const reconcile = (state: any, result: { fundId: string; year: number | null; amount: number }): void => {
+      const overview = state.fundOverview?.funds.find((item: FundOverviewItem) => item.id === result.fundId);
+      const shared = state.sharedFunds[result.fundId];
+      if (shared) {
+        if (result.year === null) shared.content.goal.all = result.amount;
+        else if (result.amount > 0) shared.content.goal.years[String(result.year)] = result.amount;
+        else delete shared.content.goal.years[String(result.year)];
+      }
+      if (!overview) return;
+      if (result.year === null) overview.allGoal = result.amount;
+      else if (state.fundOverview?.year === result.year) overview.yearGoal = result.amount;
+    };
     if (fund.sharing) {
       void mutateSharedLedger(fund.id, recipe, (revision) =>
-        api.updateSharedFundGoal(fund.id, revision, goalYear, value))
+        api.updateSharedFundGoal(fund.id, revision, goalYear, value), { refresh: "none", reconcile })
         .catch(() => undefined);
     } else {
-      mutateLedger(recipe, (expectedRevision) => api.updateFundGoal(fund.id, goalYear, value, expectedRevision));
+      mutateLedger(recipe, (expectedRevision) => api.updateFundGoal(fund.id, goalYear, value, expectedRevision), {
+        refresh: "none",
+        reconcile,
+      });
     }
   };
   const totals = ledger.funds.reduce((result, fund) => {
@@ -435,11 +535,33 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
   };
 
   const updateFund = (fund: Fund, patch: Record<string, unknown>, recipe: (draft: any) => void): void => {
+    const reconcile = (state: any): void => {
+      const current = state.ledger.funds.find((item: Fund) => item.id === fund.id);
+      const overview = state.fundOverview?.funds.find((item: FundOverviewItem) => item.id === fund.id);
+      if (!current || !overview) return;
+      overview.name = current.name;
+      overview.color = current.color;
+      overview.cat = current.cat;
+      overview.fundPlan = state.ledger.financialProfile.fundPlan[fund.id] ?? overview.fundPlan;
+      overview.openingBalance = state.ledger.financialProfile.openingBalances[fund.id] ?? overview.openingBalance;
+      const shared = state.sharedFunds[fund.id];
+      if (shared) {
+        shared.content.fund = { ...shared.content.fund, name: current.name, color: current.color, cat: current.cat };
+        shared.content.fundPlan = overview.fundPlan;
+        shared.content.openingBalance = overview.openingBalance;
+      }
+    };
     if (fund.sharing) {
-      void mutateSharedLedger(fund.id, recipe, (revision) => api.updateSharedFund(fund.id, revision, patch))
+      void mutateSharedLedger(fund.id, recipe, (revision) => api.updateSharedFund(fund.id, revision, patch), {
+        refresh: "none",
+        reconcile,
+      })
         .catch(() => undefined);
     } else {
-      mutateLedger(recipe, (expectedRevision) => api.updateFund(fund.id, patch, expectedRevision));
+      mutateLedger(recipe, (expectedRevision) => api.updateFund(fund.id, patch, expectedRevision), {
+        refresh: "none",
+        reconcile,
+      });
     }
   };
 
@@ -519,7 +641,7 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
     try {
       if (shared) {
         await mutateSharedLedger(fundId, () => undefined, (revision) =>
-          api.setSharedFundMember(fundId, email, role, revision));
+          api.setSharedFundMember(fundId, email, role, revision), { refresh: "none" });
       } else await shareFund(fundId, email, role);
       if (!shared) { onClose(); return; }
       setEmail("");
@@ -535,7 +657,7 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
     try {
       await mutateSharedLedger(fundId, () => undefined, async (revision) => {
         return api.removeSharedFundMember(fundId, memberId, revision);
-      });
+      }, { refresh: "none" });
       setMessage("Đã thu hồi quyền truy cập.");
       await refreshMembers();
     } catch (error) {
@@ -594,7 +716,22 @@ function ContributionModal({ fundId, month, onClose }: { fundId: string; month: 
     if (!(amount > 0)) return;
     try {
       await mutateSharedLedger(fundId, () => undefined, (revision) =>
-        api.addSharedFundContribution(fundId, month, amount, note, revision));
+        api.addSharedFundContribution(fundId, month, amount, note, revision), {
+        refresh: "none",
+        reconcile: (state, result: any) => {
+          const shared = state.sharedFunds[fundId];
+          if (shared) {
+            shared.content.contributions ??= {};
+            const key = `${year}-${String(monthNumber).padStart(2, "0")}`;
+            shared.content.contributions[key] ??= [];
+            shared.content.contributions[key].push(structuredClone(result));
+          }
+          const overview = state.fundOverview?.funds.find((item: FundOverviewItem) => item.id === fundId);
+          if (!overview || state.fundOverview?.year !== year || state.fundOverview.month !== monthNumber) return;
+          overview.contributionAmount += result.amount;
+          overview.contributionCount += 1;
+        },
+      });
       setAmount(0);
       setNote("");
       setMessage("Đã ghi nhận khoản gửi của bạn.");
@@ -665,13 +802,24 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
         savedAmount = target.funds[fundId]![month];
       }
     };
+    recipe(structuredClone(ledger));
+    const currentAmount = ledger.years[String(year)]!.funds[fundId]?.[month] ?? 0;
+    if (savedAmount === currentAmount && JSON.stringify(savedDetail) === JSON.stringify(existing)) {
+      onClose();
+      return;
+    }
     if (fund.sharing) {
       void mutateSharedLedger(fund.id, recipe, (revision) =>
-        api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount: savedAmount, detail: savedDetail }))
+        api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount: savedAmount, detail: savedDetail }), {
+        refresh: "none",
+        reconcile: (state, result) => reconcileFundMonth(state, result, true),
+      })
         .catch(() => undefined);
     } else {
-      recipe(structuredClone(ledger));
-      mutateLedger(recipe, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount: savedAmount, detail: savedDetail }, expectedRevision));
+      mutateLedger(recipe, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount: savedAmount, detail: savedDetail }, expectedRevision), {
+        refresh: "none",
+        reconcile: (state, result) => reconcileFundMonth(state, result, true),
+      });
     }
     onClose();
   };

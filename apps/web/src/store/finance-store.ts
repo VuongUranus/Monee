@@ -32,6 +32,12 @@ import {
 export type AuthState = "checking" | "anonymous" | "authenticated" | "error";
 export type SaveState = "idle" | "loading" | "saving" | "saved" | "error";
 export type ResourceState = "idle" | "loading" | "ready" | "error";
+type RefreshPolicy = "route" | "none";
+
+interface MutationOptions<T> {
+  refresh?: RefreshPolicy;
+  reconcile?: (state: Draft<FinanceState>, data: T) => void;
+}
 
 interface FinanceState {
   auth: AuthState;
@@ -53,6 +59,7 @@ interface FinanceState {
   loaded: boolean;
   selectedYear: number;
   selectedMonth: number;
+  periodReady: boolean;
   statisticsScope: StatisticsScope;
   saveState: SaveState;
   saveMessage: string;
@@ -70,14 +77,16 @@ interface FinanceState {
   setPeriod(year: number, month: number): void;
   setStatisticsScope(scope: StatisticsScope): void;
   updateLedger(recipe: (draft: Draft<FinanceStore>) => void): void;
-  mutateLedger(
+  mutateLedger<T>(
     recipe: (draft: Draft<FinanceStore>) => void,
-    request: (expectedRevision: number) => Promise<PersonalMutationResponse<unknown>>,
+    request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
+    options?: MutationOptions<T>,
   ): void;
-  mutateSharedLedger(
+  mutateSharedLedger<T>(
     fundId: string,
     recipe: (draft: Draft<FinanceStore>) => void,
-    request: (revision: number) => Promise<SharedMutationResponse<unknown>>,
+    request: (revision: number) => Promise<SharedMutationResponse<T>>,
+    options?: MutationOptions<T>,
   ): Promise<void>;
   shareFund(fundId: string, email: string, role: SharedFundRole): Promise<void>;
   deleteSharedFund(fundId: string): Promise<void>;
@@ -88,7 +97,10 @@ interface FinanceState {
 
 let writeQueue = Promise.resolve();
 let writeVersion = 0;
+let queuedMutationVersion = 0;
 let mutationEpoch = 0;
+let pendingRouteRefresh = false;
+let periodSelectionVersion = 0;
 let expensesRequest = 0;
 let fundsRequest = 0;
 let statisticsRequest = 0;
@@ -269,12 +281,21 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     });
   };
 
-  const persist = (
+  const refreshWhenSettled = async (mutationVersion: number): Promise<void> => {
+    if (mutationVersion !== queuedMutationVersion || !pendingRouteRefresh) return;
+    pendingRouteRefresh = false;
+    await refreshCurrentRoute(true);
+  };
+
+  const persist = <T>(
     recipe: (draft: Draft<FinanceStore>) => void,
-    request: (expectedRevision: number) => Promise<PersonalMutationResponse<unknown>>,
+    request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
+    options: MutationOptions<T> = {},
   ): void => {
     const version = ++writeVersion;
+    const mutationVersion = ++queuedMutationVersion;
     const epoch = mutationEpoch;
+    if (options.refresh !== "none") pendingRouteRefresh = true;
     set((state) => {
       recipe(state.ledger);
       state.saveState = "saving";
@@ -290,10 +311,12 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           // CRUD danh mục/tài khoản dùng chung mutation queue; buộc lần tải màn hình
           // chi tiêu kế tiếp lấy config mới thay vì ghi đè optimistic state bằng cache cũ.
           state.expenseConfig = null;
+          options.reconcile?.(state as Draft<FinanceState>, response.data);
         });
-        if (version === writeVersion) await refreshCurrentRoute(true);
+        await refreshWhenSettled(mutationVersion);
       } catch (error) {
         mutationEpoch += 1;
+        pendingRouteRefresh = false;
         throw error;
       }
     });
@@ -343,6 +366,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     loaded: false,
     selectedYear: currentPeriod().year,
     selectedMonth: currentPeriod().month,
+    periodReady: true,
     statisticsScope: { mode: "year", year: currentPeriod().year },
     saveState: "loading",
     saveMessage: "Đang tải dữ liệu…",
@@ -356,21 +380,27 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
         state.authMessage = "";
       });
       try {
-        const bootstrap = await api.loadData();
+        let bootstrap = await api.loadData();
         const period = currentPeriod();
+        if (!bootstrap.availableYears.includes(period.year)) {
+          const ensured = await api.ensureYear(period.year, bootstrap.workspaceRevision);
+          bootstrap = {
+            ...bootstrap,
+            workspaceRevision: ensured.workspaceRevision,
+            availableYears: [...bootstrap.availableYears, period.year].sort((left, right) => left - right),
+          };
+        }
         applyBootstrap(bootstrap, true);
         set((state) => {
           state.auth = "authenticated";
           state.loaded = true;
           state.selectedYear = period.year;
           state.selectedMonth = period.month;
+          state.periodReady = true;
           state.statisticsScope = { mode: "year", year: period.year };
           state.saveState = "saved";
           state.saveMessage = "Đã tải dữ liệu.";
         });
-        if (!bootstrap.availableYears.includes(period.year)) {
-          persist(() => undefined, (expectedRevision) => api.ensureYear(period.year, expectedRevision));
-        }
       } catch (error) {
         if (error instanceof UnauthorizedError) {
           set((state) => {
@@ -528,17 +558,55 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     setPeriod(year, month) {
       const selectedMonth = Math.max(0, Math.min(11, month));
       const shouldCreate = !get().bootstrapData?.availableYears.includes(year);
-      set((state) => {
+      const selectionVersion = ++periodSelectionVersion;
+      const commitPeriod = (ready: boolean): void => set((state) => {
         state.selectedYear = year;
         state.selectedMonth = selectedMonth;
+        state.periodReady = ready;
         state.ledger.years[String(year)] ??= blankYearWith(state.ledger.funds);
         if (state.statisticsScope.mode === "year") state.statisticsScope = { mode: "year", year };
       });
-      if (shouldCreate) {
-        persist(() => undefined, (expectedRevision) => api.ensureYear(year, expectedRevision));
-      } else {
-        void refreshCurrentRoute();
+      if (!shouldCreate) {
+        commitPeriod(true);
+        return;
       }
+
+      commitPeriod(false);
+
+      set((state) => {
+        state.saveState = "saving";
+        state.saveMessage = `Đang tạo năm ${year}…`;
+      });
+      const operation = writeQueue.then(() => api.ensureYear(year, get().workspaceRevision));
+      writeQueue = operation.then(() => undefined, () => undefined);
+      void operation.then((response) => {
+        set((state) => {
+          state.workspaceRevision = response.workspaceRevision;
+          if (state.bootstrapData) {
+            state.bootstrapData.workspaceRevision = response.workspaceRevision;
+            if (!state.bootstrapData.availableYears.includes(year)) {
+              state.bootstrapData.availableYears.push(year);
+              state.bootstrapData.availableYears.sort((left, right) => left - right);
+            }
+          }
+          state.ledger.years[String(year)] ??= blankYearWith(state.ledger.funds);
+          state.saveState = "saved";
+          state.saveMessage = "Đã lưu thay đổi.";
+        });
+        if (selectionVersion === periodSelectionVersion) {
+          set((state) => { state.periodReady = true; });
+        }
+      }).catch((error: unknown) => {
+        if (error instanceof UnauthorizedError) {
+          markUnauthorized();
+          return;
+        }
+        set((state) => {
+          state.saveState = "error";
+          state.saveMessage = "Không thể tạo năm mới. Đang tải lại dữ liệu…";
+        });
+        if (get().auth === "authenticated") void reloadAfterConflict();
+      });
     },
 
     setStatisticsScope(scope) {
@@ -550,11 +618,14 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       set((state) => { recipe(state.ledger); });
     },
 
-    mutateLedger(recipe, request) {
-      persist(recipe, request);
+    mutateLedger(recipe, request, options) {
+      persist(recipe, request, options);
     },
 
-    async mutateSharedLedger(fundId, recipe, request) {
+    async mutateSharedLedger(fundId, recipe, request, options = {}) {
+      const version = ++writeVersion;
+      const mutationVersion = ++queuedMutationVersion;
+      if (options.refresh !== "none") pendingRouteRefresh = true;
       set((state) => {
         recipe(state.ledger);
         state.saveState = "saving";
@@ -566,17 +637,27 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
         const result = await request(shared.revision);
         set((state) => {
           if (state.sharedFunds[fundId]) state.sharedFunds[fundId]!.revision = result.revision;
-          state.saveState = "saved";
-          state.saveMessage = "Đã lưu thay đổi.";
+          const overviewFund = state.fundOverview?.funds.find((fund) => fund.id === fundId);
+          if (overviewFund) overviewFund.revision = result.revision;
+          options.reconcile?.(state as Draft<FinanceState>, result.data);
         });
-        await get().loadFunds(true);
+        await refreshWhenSettled(mutationVersion);
       });
       writeQueue = operation.then(() => undefined, () => undefined);
+      void operation.then(() => {
+        if (version === writeVersion) {
+          set((state) => {
+            state.saveState = "saved";
+            state.saveMessage = "Đã lưu thay đổi.";
+          });
+        }
+      });
       try {
         await operation;
       } catch (error) {
         if (error instanceof UnauthorizedError) markUnauthorized();
         else {
+          pendingRouteRefresh = false;
           set((state) => {
             state.saveState = "error";
             state.saveMessage = "Quỹ chung đã thay đổi. Đang tải lại dữ liệu…";
@@ -588,16 +669,43 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     },
 
     async shareFund(fundId, email, role) {
-      const result = await api.createSharedFund(fundId, email, role, get().workspaceRevision);
-      set((state) => { state.workspaceRevision = result.workspaceRevision; });
-      await get().loadFunds(true);
+      const mutationVersion = ++queuedMutationVersion;
+      ++writeVersion;
+      pendingRouteRefresh = true;
+      const operation = writeQueue.then(() => api.createSharedFund(fundId, email, role, get().workspaceRevision));
+      writeQueue = operation.then(() => undefined, () => undefined);
+      try {
+        const result = await operation;
+        set((state) => {
+          state.workspaceRevision = result.workspaceRevision;
+          if (state.bootstrapData) state.bootstrapData.workspaceRevision = result.workspaceRevision;
+        });
+        await refreshWhenSettled(mutationVersion);
+      } catch (error) {
+        pendingRouteRefresh = false;
+        throw error;
+      }
     },
 
     async deleteSharedFund(fundId) {
       const shared = get().sharedFunds[fundId];
       if (!shared) throw new Error("Không tìm thấy quỹ chung.");
-      await api.deleteSharedFund(fundId, shared.revision);
-      await get().loadFunds(true);
+      const mutationVersion = ++queuedMutationVersion;
+      ++writeVersion;
+      pendingRouteRefresh = true;
+      const operation = writeQueue.then(() => {
+        const latest = get().sharedFunds[fundId];
+        if (!latest) throw new Error("Không tìm thấy quỹ chung.");
+        return api.deleteSharedFund(fundId, latest.revision);
+      });
+      writeQueue = operation.then(() => undefined, () => undefined);
+      try {
+        await operation;
+        await refreshWhenSettled(mutationVersion);
+      } catch (error) {
+        pendingRouteRefresh = false;
+        throw error;
+      }
     },
 
     replaceLedger(ledger, shouldPersist = true) {
@@ -631,6 +739,9 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     },
 
     async persistMarketQuotes(payload) {
+      const mutationVersion = ++queuedMutationVersion;
+      ++writeVersion;
+      pendingRouteRefresh = true;
       try {
         const operation = writeQueue.then(() => api.marketQuotes(payload, get().workspaceRevision));
         writeQueue = operation.then(() => undefined, () => undefined);
@@ -640,9 +751,10 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           if (state.bootstrapData) state.bootstrapData.workspaceRevision = result.workspaceRevision;
           mergeMarketResponse(state.ledger, result.quotes);
         });
-        await get().loadFunds(true);
+        await refreshWhenSettled(mutationVersion);
         return result;
       } catch (error) {
+        pendingRouteRefresh = false;
         if (error instanceof UnauthorizedError) markUnauthorized();
         else if (error instanceof ApiRequestError && error.code === "revision_conflict") {
           await reloadAfterConflict();

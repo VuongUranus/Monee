@@ -33,9 +33,10 @@ export function StatisticsPage() {
   const setScope = useFinanceStore((state) => state.setStatisticsScope);
   const selectedYear = useFinanceStore((state) => state.selectedYear);
   const selectedMonth = useFinanceStore((state) => state.selectedMonth);
+  const periodReady = useFinanceStore((state) => state.periodReady);
   useEffect(() => {
-    void loadStatistics(scope);
-  }, [loadStatistics, scope]);
+    if (periodReady) void loadStatistics(scope);
+  }, [loadStatistics, periodReady, scope]);
 
   const availableYears = (statistics?.availableYears ?? [selectedYear]).slice().sort((a, b) => b - a);
   const monthOptions = availableYears.flatMap((year) => Array.from({ length: 12 }, (_, month) => {

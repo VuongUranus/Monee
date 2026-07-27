@@ -56,6 +56,7 @@ const port = Number(process.env.E2E_PORT || 3107);
 const app = await buildApp({
   workspaceRoot,
   repository: postgres.repository,
+  database: postgres.client.db,
   env: {
     SESSION_SECRET: "e2e-session-secret-at-least-twenty-bytes",
     APP_BASE_URL: `http://127.0.0.1:${port}`,
@@ -64,7 +65,7 @@ const app = await buildApp({
 });
 
 app.get("/__test/login", async (_request, reply) => {
-  const sessionId = app.finance.sessions.createSession(profile);
+  const sessionId = await app.finance.sessions.createSession(profile);
   return reply
     .setCookie("finance_session", app.finance.sessions.signedSessionValue(sessionId), {
       path: "/",

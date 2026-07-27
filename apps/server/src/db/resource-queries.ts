@@ -399,8 +399,28 @@ export async function readFundOverview(
 ): Promise<FundOverviewResponse> {
   const fundRows = await accessibleFunds(db, userId);
   const ids = fundRows.map((fund) => fund.id);
-  const [months, goals, contributions, notes, settings, incomeRows, assetRows, market] = await Promise.all([
-    ids.length ? db.select().from(schema.fundMonths).where(inArray(schema.fundMonths.fundId, ids)) : [],
+  const [yearMonths, allTimeTotals, periodTotals, goals, contributions, notes, settings, incomeRows, assetRows, market] = await Promise.all([
+    ids.length ? db.select({
+      fundId: schema.fundMonths.fundId,
+      month: schema.fundMonths.month,
+      amount: schema.fundMonths.amount,
+    }).from(schema.fundMonths).where(and(
+      inArray(schema.fundMonths.fundId, ids),
+      eq(schema.fundMonths.year, year),
+    )) : [],
+    ids.length ? db.select({
+      fundId: schema.fundMonths.fundId,
+      amount: sql<number>`coalesce(sum(${schema.fundMonths.amount}), 0)`,
+    }).from(schema.fundMonths)
+      .where(inArray(schema.fundMonths.fundId, ids))
+      .groupBy(schema.fundMonths.fundId) : [],
+    ids.length ? db.select({
+      year: schema.fundMonths.year,
+      month: schema.fundMonths.month,
+      amount: sql<number>`coalesce(sum(${schema.fundMonths.amount}), 0)`,
+    }).from(schema.fundMonths)
+      .where(inArray(schema.fundMonths.fundId, ids))
+      .groupBy(schema.fundMonths.year, schema.fundMonths.month) : [],
     ids.length ? db.select().from(schema.fundYearGoals).where(and(
       inArray(schema.fundYearGoals.fundId, ids),
       eq(schema.fundYearGoals.year, year),
@@ -426,7 +446,7 @@ export async function readFundOverview(
           new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10),
         ),
       )),
-    ids.length ? db.select({
+    ids.length ? db.selectDistinct({
       category: schema.funds.category,
       ticker: schema.holdingLots.ticker,
       exchange: schema.holdingLots.exchange,
@@ -440,11 +460,15 @@ export async function readFundOverview(
   ]);
   const [note] = notes;
   const [setting] = settings;
-  const periodTotals = new Map<string, number>();
-  for (const entry of months) {
-    const key = `${entry.year}-${entry.month}`;
-    periodTotals.set(key, (periodTotals.get(key) ?? 0) + entry.amount);
+  const yearAmountsByFund = new Map<string, number[]>();
+  for (const entry of yearMonths) {
+    const amounts = yearAmountsByFund.get(entry.fundId) ?? new Array<number>(12).fill(0);
+    amounts[entry.month - 1] = asNumber(entry.amount);
+    yearAmountsByFund.set(entry.fundId, amounts);
   }
+  const allTimeTotalByFund = new Map(allTimeTotals.map((entry) => [entry.fundId, asNumber(entry.amount)]));
+  const activeYearMonths = periodTotals.filter((entry) => entry.year === year && asNumber(entry.amount) > 0).length;
+  const activeAllTimeMonths = periodTotals.filter((entry) => asNumber(entry.amount) > 0).length;
   const marketAssetMap = new Map<string, MarketAssetRequest>();
   for (const row of assetRows) {
     if (row.category === "gold") {
@@ -464,20 +488,15 @@ export async function readFundOverview(
     month,
     note: note?.note ?? "",
     income: asNumber(incomeRows[0]?.amount),
-    yearActiveMonths: [...periodTotals].filter(([key, amount]) =>
-      key.startsWith(`${year}-`) && amount > 0).length,
-    allTimeActiveMonths: [...periodTotals.values()].filter((amount) => amount > 0).length,
+    yearActiveMonths: activeYearMonths,
+    allTimeActiveMonths: activeAllTimeMonths,
     showGoals: setting?.showGoals ?? false,
     debt: {
       balance: setting?.debtBalance ?? 0,
       monthlyPayment: setting?.debtMonthlyPayment ?? 0,
     },
     funds: fundRows.map((fund): FundOverviewItem => {
-      const fundMonths = months.filter((entry) => entry.fundId === fund.id);
-      const yearAmounts = new Array<number>(12).fill(0);
-      for (const entry of fundMonths) {
-        if (entry.year === year) yearAmounts[entry.month - 1] = entry.amount;
-      }
+      const yearAmounts = yearAmountsByFund.get(fund.id) ?? new Array<number>(12).fill(0);
       const periodContributions = contributions.filter((entry) => entry.fundId === fund.id);
       return {
         id: fund.externalId,
@@ -496,7 +515,7 @@ export async function readFundOverview(
         monthAmount: yearAmounts[month - 1] ?? 0,
         yearAmounts,
         yearTotal: yearAmounts.reduce((sum, amount) => sum + amount, 0),
-        allTimeTotal: fundMonths.reduce((sum, entry) => sum + entry.amount, 0),
+        allTimeTotal: allTimeTotalByFund.get(fund.id) ?? 0,
         contributionAmount: periodContributions.reduce((sum, entry) => sum + entry.amount, 0),
         contributionCount: periodContributions.length,
       };

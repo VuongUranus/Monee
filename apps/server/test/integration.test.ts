@@ -46,6 +46,7 @@ async function createAuthenticatedApp(options: {
   await seedUser(postgres, profile, initial);
   const app = await buildApp({
     repository: postgres.repository,
+    database: postgres.client.db,
     serveWeb: false,
     env: {
       SESSION_SECRET: "integration-session-secret-at-least-twenty-bytes",
@@ -53,7 +54,7 @@ async function createAuthenticatedApp(options: {
     },
     ...(options.marketService ? { marketService: options.marketService } : {}),
   });
-  const sessionId = app.finance.sessions.createSession(profile);
+  const sessionId = await app.finance.sessions.createSession(profile);
   const cookie = `finance_session=${app.finance.sessions.signedSessionValue(sessionId)}`;
   return { app, cookie };
 }
@@ -109,6 +110,65 @@ describe("PostgreSQL repository", () => {
 });
 
 describe("Fastify CRUD, sharing và market routes", () => {
+  it("tổng hợp overview nhiều năm mà không đổi contract và khử asset trùng", async () => {
+    const initialData = createDefaultStore();
+    initialData.funds = [
+      { id: "reserve", name: "Dự phòng", color: "#3f7d5c", cat: "saving" },
+      { id: "stocks", name: "Cổ phiếu", color: "#3b6ea5", cat: "stock" },
+      { id: "gold", name: "Vàng", color: "#c8963e", cat: "gold" },
+    ];
+    initialData.years["2025"] = {
+      income: new Array(12).fill(0),
+      funds: {
+        reserve: [100, ...new Array(11).fill(0)],
+        stocks: [...new Array(11).fill(0), 400],
+        gold: new Array(12).fill(0),
+      },
+      details: {
+        reserve: new Array(12).fill(null),
+        stocks: [...new Array(11).fill(null), { type: "hold", lots: [{ ticker: "VNM", exchange: "HOSE", qty: 1 }] }],
+        gold: new Array(12).fill(null),
+      },
+      notes: new Array(12).fill(""),
+    };
+    initialData.years["2026"] = {
+      income: new Array(12).fill(0),
+      funds: {
+        reserve: [200, ...new Array(11).fill(0)],
+        stocks: [...new Array(6).fill(0), 500, ...new Array(5).fill(0)],
+        gold: [...new Array(6).fill(0), 300, ...new Array(5).fill(0)],
+      },
+      details: {
+        reserve: new Array(12).fill(null),
+        stocks: [...new Array(6).fill(null), { type: "hold", lots: [{ ticker: "VNM", exchange: "HOSE", qty: 2 }] }, ...new Array(5).fill(null)],
+        gold: [...new Array(6).fill(null), { type: "gold", lots: [{ chi: 1 }] }, ...new Array(5).fill(null)],
+      },
+      notes: new Array(12).fill(""),
+    };
+    const { app, cookie } = await createAuthenticatedApp({ initialData: initialData as unknown as StoredFinancePayload });
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie },
+      });
+      expect(response.statusCode).toBe(200);
+      const overview = response.json();
+      expect(overview).toMatchObject({ year: 2026, month: 7, yearActiveMonths: 2, allTimeActiveMonths: 3 });
+      expect(overview.funds).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "reserve", yearTotal: 200, allTimeTotal: 300 }),
+        expect.objectContaining({ id: "stocks", yearTotal: 500, allTimeTotal: 900 }),
+        expect.objectContaining({ id: "gold", yearTotal: 300, allTimeTotal: 300 }),
+      ]));
+      expect(overview.funds.find((fund: { id: string }) => fund.id === "stocks").yearAmounts[6]).toBe(500);
+      expect(overview.marketAssets.filter((asset: { type: string; symbol?: string }) =>
+        asset.type === "stock" && asset.symbol === "VNM")).toHaveLength(1);
+      expect(overview.marketAssets).toContainEqual({ type: "gold" });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("chia sẻ quỹ theo email, áp quyền và phát hiện xung đột revision", async () => {
     const initialData = {
       ...createDefaultStore(),
@@ -131,7 +191,7 @@ describe("Fastify CRUD, sharing và market routes", () => {
     const { app, cookie } = await createAuthenticatedApp({ initialData });
     const bob: UserProfile = { sub: "integration-bob", email: "bob@example.com", name: "Bob", picture: "" };
     await postgres.repository.provisionUser(bob);
-    const bobSession = app.finance.sessions.createSession(bob);
+    const bobSession = await app.finance.sessions.createSession(bob);
     const bobCookie = `finance_session=${app.finance.sessions.signedSessionValue(bobSession)}`;
     try {
       const ownerWorkspace = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
@@ -713,7 +773,7 @@ describe("Fastify SPA production", () => {
     await fs.writeFile(path.join(distRoot, "assets", "app.js"), "globalThis.__APP__ = true;", "utf8");
     await fs.writeFile(path.join(distRoot, ".secret"), "not public", "utf8");
 
-    const app = await buildApp({ workspaceRoot: directory, repository: postgres.repository, webRoot, env: {} });
+    const app = await buildApp({ workspaceRoot: directory, repository: postgres.repository, database: postgres.client.db, webRoot, env: {} });
     try {
       for (const route of ["/funds", "/expenses", "/statistics"]) {
         const response = await app.inject({ method: "GET", url: route });

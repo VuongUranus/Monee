@@ -33,7 +33,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: GoogleStartQuery }>("/api/auth/google", async (request, reply) => {
     if (!requireOAuth(app, reply)) return reply;
     const { config, sessions } = app.finance;
-    const { state, challenge } = sessions.beginOAuth(request.query.returnTo);
+    const { state, challenge } = await sessions.beginOAuth(request.query.returnTo);
     const authorizeUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     authorizeUrl.search = new URLSearchParams({
       client_id: config.googleClientId,
@@ -60,7 +60,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     if (!requireOAuth(app, reply)) return reply;
     const { config, sessions, fetchImpl, repository } = app.finance;
     const { state, code, error: oauthError } = request.query;
-    const pending = sessions.consumeOAuth(state, request.cookies.finance_oauth_state);
+    const pending = await sessions.consumeOAuth(state, request.cookies.finance_oauth_state);
     if (!pending) return reply.code(400).type("text/plain").send("Phiên đăng nhập không hợp lệ hoặc đã hết hạn.");
     if (oauthError || !code) {
       return reply.code(400).type("text/plain").send("Đăng nhập Google đã bị hủy hoặc không thành công.");
@@ -97,7 +97,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       name: String(profile.name || profile.email),
       picture: typeof profile.picture === "string" ? profile.picture : "",
     });
-    const sessionId = sessions.createSession(account);
+    const sessionId = await sessions.createSession(account);
     reply
       .setCookie("finance_session", sessions.signedSessionValue(sessionId), {
         path: "/",
@@ -118,7 +118,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/auth/logout", async (request, reply) => {
     const { sessions, config } = app.finance;
-    sessions.deleteSession(request.cookies.finance_session);
+    await sessions.deleteSession(request.cookies.finance_session);
     return reply
       .clearCookie("finance_session", {
         path: "/",

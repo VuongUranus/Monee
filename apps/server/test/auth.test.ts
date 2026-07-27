@@ -7,7 +7,7 @@ import { createDefaultStore } from "@chi-tieu/shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/application.js";
 import { parseDotEnv } from "../src/lib/config.js";
-import { SESSION_TTL_MS } from "../src/lib/session.js";
+import { OAUTH_STATE_TTL_MS, SESSION_TTL_MS } from "../src/lib/session.js";
 import type { FetchLike } from "../src/services/market.js";
 import { createPostgresTestContext, type PostgresTestContext } from "./postgres.js";
 
@@ -59,6 +59,7 @@ async function withApp(
   const app = await buildApp({
     workspaceRoot: directory,
     repository: postgres.repository,
+    database: postgres.client.db,
     serveWeb: false,
     env: {
       GOOGLE_CLIENT_ID: "client-id",
@@ -157,18 +158,90 @@ describe("Fastify API tương thích server cũ", () => {
   it("từ chối cookie phiên bị sửa và phiên đã quá TTL", async () => {
     let clock = 10_000;
     await withApp({ years: {} }, async ({ app }) => {
-      const id = app.finance.sessions.createSession({
+      const profile = {
         sub: "session-user",
         email: "session@example.com",
         name: "Session User",
         picture: "",
-      });
+      };
+      await app.finance.repository.provisionUser(profile);
+      const id = await app.finance.sessions.createSession(profile);
       const signed = app.finance.sessions.signedSessionValue(id);
       const validCookie = `finance_session=${signed}`;
       expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: validCookie } })).statusCode).toBe(200);
       expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: `${validCookie}x` } })).statusCode).toBe(401);
       clock += SESSION_TTL_MS;
       expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: validCookie } })).statusCode).toBe(401);
+    }, {}, { now: () => clock });
+  });
+
+  it("giữ session và OAuth state khi Fastify được khởi tạo lại", async () => {
+    await postgres.reset();
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "finance-auth-restart-"));
+    temporaryDirectories.push(directory);
+    const build = () => buildApp({
+      workspaceRoot: directory,
+      repository: postgres.repository,
+      database: postgres.client.db,
+      serveWeb: false,
+      env: {
+        GOOGLE_CLIENT_ID: "client-id",
+        GOOGLE_CLIENT_SECRET: "client-secret",
+        SESSION_SECRET: "test-session-secret",
+        APP_BASE_URL: "http://127.0.0.1:3000",
+      },
+      fetchImpl: fakeGoogleFetch,
+    });
+    const first = await build();
+    let second: FastifyInstance | undefined;
+    let third: FastifyInstance | undefined;
+    try {
+      const sessionCookie = await login(first, "alice");
+      const oauthStart = await first.inject({ method: "GET", url: "/api/auth/google?returnTo=%2Fstatistics" });
+      const state = new URL(oauthStart.headers.location!).searchParams.get("state")!;
+      const stateCookie = cookiePair(oauthStart.headers["set-cookie"], "finance_oauth_state");
+      await first.close();
+
+      second = await build();
+      const restoredSession = await second.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: sessionCookie } });
+      expect(restoredSession.statusCode).toBe(200);
+      expect(restoredSession.json().user.email).toBe("alice@example.com");
+      const callback = await second.inject({
+        method: "GET",
+        url: `/api/auth/google/callback?state=${encodeURIComponent(state)}&code=bob`,
+        headers: { cookie: stateCookie },
+      });
+      expect(callback.statusCode).toBe(302);
+      expect(callback.headers.location).toBe("/statistics");
+      expect((await second.inject({ method: "POST", url: "/api/auth/logout", headers: { cookie: sessionCookie } })).statusCode).toBe(204);
+      await second.close();
+
+      third = await build();
+      expect((await third.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: sessionCookie } })).statusCode).toBe(401);
+      expect((await third.inject({
+        method: "GET",
+        url: `/api/auth/google/callback?state=${encodeURIComponent(state)}&code=bob`,
+        headers: { cookie: stateCookie },
+      })).statusCode).toBe(400);
+    } finally {
+      await first.close().catch(() => undefined);
+      await second?.close().catch(() => undefined);
+      await third?.close().catch(() => undefined);
+    }
+  });
+
+  it("từ chối OAuth state đã quá hạn", async () => {
+    let clock = 10_000;
+    await withApp({ years: {} }, async ({ app }) => {
+      const start = await app.inject({ method: "GET", url: "/api/auth/google" });
+      const state = new URL(start.headers.location!).searchParams.get("state")!;
+      const stateCookie = cookiePair(start.headers["set-cookie"], "finance_oauth_state");
+      clock += OAUTH_STATE_TTL_MS;
+      expect((await app.inject({
+        method: "GET",
+        url: `/api/auth/google/callback?state=${encodeURIComponent(state)}&code=alice`,
+        headers: { cookie: stateCookie },
+      })).statusCode).toBe(400);
     }, {}, { now: () => clock });
   });
 
@@ -195,6 +268,7 @@ describe("Fastify API tương thích server cũ", () => {
       workspaceRoot: directory,
       webRoot,
       repository: postgres.repository,
+      database: postgres.client.db,
       env: {},
     });
     try {
@@ -217,6 +291,7 @@ describe("Fastify API tương thích server cũ", () => {
       workspaceRoot: directory,
       webRoot,
       repository: postgres.repository,
+      database: postgres.client.db,
       env: {
         GOOGLE_CLIENT_ID: "client-id",
         GOOGLE_CLIENT_SECRET: "client-secret",

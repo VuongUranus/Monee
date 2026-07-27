@@ -280,7 +280,7 @@ Response:
 
 ## Vận hành client
 
-- Sau bootstrap, chỉ tải resource của route hiện tại. Khi đổi tháng/năm chỉ refetch resource của route đó.
+- Sau bootstrap, chỉ tải resource của route hiện tại. Khi đổi tháng/năm chỉ component của route đó tải lại resource, nên mỗi lần đổi kỳ chỉ có một GET tương ứng.
 - Các `GET` URL giống nhau đang chạy được frontend gộp thành một request để React Strict Mode và event đổi kỳ không tạo request mạng trùng.
 - Khi mutation trả `409 revision_conflict`, xoá personal cache, gọi lại bootstrap rồi tải resource của route hiện tại. Với `shared_fund_conflict`, chỉ refetch overview/detail/members/contributions của quỹ đó.
-- Sau create/update/delete, invalidate đúng dependency: chi tiêu ảnh hưởng expense summary/transactions/statistics; quỹ ảnh hưởng overview/statistics; market ảnh hưởng overview các `affectedPeriods`.
+- Sau create/update/delete, invalidate đúng dependency: chi tiêu ảnh hưởng expense summary/transactions/statistics. Các cập nhật quỹ cục bộ (số tiền tháng, chi tiết, ghi chú, mục tiêu, preference, metadata, thành viên, đóng góp) vá Zustand từ optimistic state và response mutation, không refetch overview. Thay đổi cấu trúc quỹ, reset tháng, market và conflict mới tải lại overview; market ảnh hưởng overview các `affectedPeriods`.
