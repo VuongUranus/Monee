@@ -248,6 +248,10 @@ function systemInstruction(
       : "",
     "Với câu nhập nhanh thiếu loại, mặc định expense; thiếu ngày, mặc định hôm nay; thiếu tài khoản thì bỏ trống.",
     "Phải gọi get_expense_config trước khi chọn categoryId/accountId và get_fund_overview trước khi chọn fundId.",
+    "Khi trích quỹ, chỉ dùng fundId nằm trong writableSavingFunds hoặc có canQuickAllocate=true. Không chọn quỹ chỉ vì tên gần giống.",
+    "Nếu tên người dùng nêu khớp quỹ không được ghi nhưng có quỹ được ghi khác cùng tên, hãy hỏi người dùng chọn rõ; không tự chuyển sang quỹ khác.",
+    "Câu như “đã mua 1 BTC/cổ phiếu/vàng” là yêu cầu ghi nhận tài sản, không phải yêu cầu tìm Internet. Không được trả lời rằng thiếu Internet.",
+    "Quỹ stock, gold và crypto cần dữ liệu lot nên chưa tạo proposal bằng trợ lý; hãy hướng dẫn người dùng mở chi tiết quỹ để nhập số lượng, giá mua, ngày mua và phí nếu có.",
     "Một tin nhắn có thể chứa từ 1 đến 10 thao tác ghi. Hãy nhận diện đầy đủ từng khoản thu, chi và trích quỹ theo đúng thứ tự xuất hiện.",
     "Chỉ gọi propose_finance_batch đúng một lần và phải đưa đủ mọi thao tác ghi rõ ràng vào cùng batch. Không được bỏ sót phần sau của câu.",
     "Nếu có hơn 10 thao tác, hoặc chỉ một thao tác còn mơ hồ/thiếu danh mục, quỹ, ngày hay ý định, không gọi propose_finance_batch và phải hỏi lại cho toàn bộ nhóm.",
@@ -401,24 +405,38 @@ export const assistantRoutes: FastifyPluginAsync = async (app) => {
             input.data.month,
           );
           addEvidence("funds", `Quỹ ${input.data.year}-${String(input.data.month).padStart(2, "0")}`);
-          return {
-            year: data.year,
-            month: data.month,
-            income: data.income,
-            debtSummary: data.debtSummary,
-            funds: data.funds.map((fund: any) => ({
+          const funds = data.funds.map((fund: any) => {
+            const canQuickAllocate = !fund.role && fund.cat === "saving";
+            const quickAllocationRestriction = canQuickAllocate
+              ? undefined
+              : fund.role
+                ? "shared_fund_read_only"
+                : "investment_requires_lot_details";
+            return {
               id: fund.id,
               name: fund.name,
               category: fund.cat,
               shared: Boolean(fund.role),
               role: fund.role,
+              canQuickAllocate,
+              ...(quickAllocationRestriction ? { quickAllocationRestriction } : {}),
               monthAmount: fund.monthAmount,
               yearTotal: fund.yearTotal,
               allTimeTotal: fund.allTimeTotal,
               yearGoal: fund.yearGoal,
               allGoal: fund.allGoal,
               openingBalance: fund.openingBalance,
-            })),
+            };
+          });
+          return {
+            year: data.year,
+            month: data.month,
+            income: data.income,
+            debtSummary: data.debtSummary,
+            writableSavingFunds: funds
+              .filter((fund) => fund.canQuickAllocate)
+              .map(({ id, name, monthAmount }) => ({ id, name, monthAmount })),
+            funds,
           };
         }
         case "get_debt_overview": {
@@ -502,8 +520,22 @@ export const assistantRoutes: FastifyPluginAsync = async (app) => {
             const overview = overviewByPeriod.get(periodKey);
             const fund = overview?.funds.find((candidate: any) => candidate.id === item.fundId);
             if (!fund) throw new Error("Không tìm thấy quỹ.");
-            if (fund.role) throw new Error("Chỉ được ghi vào quỹ cá nhân.");
-            if (fund.cat !== "saving") throw new Error("Chỉ có thể trích nhanh vào quỹ tiết kiệm.");
+            if (fund.role) {
+              const writableNames = overview!.funds
+                .filter((candidate: any) => !candidate.role && candidate.cat === "saving")
+                .map((candidate: any) => candidate.name);
+              throw new Error(
+                `Quỹ "${fund.name}" là quỹ chung và không hỗ trợ trích nhanh bằng trợ lý. `
+                + `Quỹ cá nhân saving có thể ghi: ${writableNames.length ? writableNames.join(", ") : "không có"}. `
+                + "Chỉ chọn quỹ khác khi người dùng nêu đúng tên; nếu chưa rõ hãy hỏi lại.",
+              );
+            }
+            if (fund.cat !== "saving") {
+              throw new Error(
+                `Quỹ "${fund.name}" thuộc loại ${fund.cat} và cần nhập chi tiết lot trên màn hình quỹ. `
+                + "Đây không phải hạn chế Internet; không tạo proposal trích nhanh.",
+              );
+            }
             const targetKey = `${item.fundId}:${periodKey}`;
             const previousAmount = nextFundAmounts.get(targetKey) ?? fund.monthAmount;
             const nextAmount = item.operation === "increment"
@@ -678,8 +710,18 @@ export const assistantRoutes: FastifyPluginAsync = async (app) => {
         const periodKey = `${first.year}-${String(first.month).padStart(2, "0")}`;
         const fund = overviewByPeriod.get(periodKey)?.funds.find((item: any) => item.id === first.fundId);
         if (!fund) throw new SharedFundError("fund_not_found", 404, "Không tìm thấy quỹ.");
-        if (fund.role) throw new SharedFundError("forbidden", 403, "Chỉ được ghi vào quỹ cá nhân.");
-        if (fund.cat !== "saving") throw invalidRequest("Chỉ có thể trích nhanh vào quỹ tiết kiệm.");
+        if (fund.role) {
+          throw new SharedFundError(
+            "forbidden",
+            403,
+            `Quỹ "${fund.name}" là quỹ chung và không hỗ trợ trích nhanh bằng trợ lý.`,
+          );
+        }
+        if (fund.cat !== "saving") {
+          throw invalidRequest(
+            `Quỹ "${fund.name}" cần nhập chi tiết lot trên màn hình quỹ, không thể trích nhanh bằng trợ lý.`,
+          );
+        }
         if (fund.monthAmount === last.nextAmount) states.push("applied");
         else if (fund.monthAmount === first.previousAmount) states.push("fresh");
         else {

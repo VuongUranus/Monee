@@ -1348,6 +1348,120 @@ describe("Trợ lý tài chính AI", () => {
       await app.close();
     }
   });
+
+  it("chỉ công bố quỹ saving cá nhân là có thể trích nhanh và giải thích đúng quỹ chung/crypto", async () => {
+    const initial = assistantFixture();
+    initial.funds.push(
+      { id: "joint", name: "Quỹ Tiết Kiệm", color: "#8a5cc4", cat: "saving" },
+      { id: "btc", name: "Bitcoin", color: "#f59e0b", cat: "crypto" },
+    );
+    initial.years["2026"]!.funds.joint = new Array(12).fill(0);
+    initial.years["2026"]!.funds.btc = new Array(12).fill(0);
+    initial.years["2026"]!.details.joint = new Array(12).fill(null);
+    initial.years["2026"]!.details.btc = new Array(12).fill(null);
+    const toolErrors: string[] = [];
+    const assistantService: AssistantService = {
+      async generate(input) {
+        expect(input.systemInstruction).toContain("không phải yêu cầu tìm Internet");
+        expect(input.systemInstruction).toContain("chỉ dùng fundId nằm trong writableSavingFunds");
+        const overview = await input.executeTool("get_fund_overview", { year: 2026, month: 7 }) as {
+          writableSavingFunds: Array<{ id: string; name: string }>;
+          funds: Array<{
+            id: string;
+            name: string;
+            category: string;
+            shared: boolean;
+            canQuickAllocate: boolean;
+            quickAllocationRestriction?: string;
+          }>;
+        };
+        expect(overview.writableSavingFunds).toEqual([
+          expect.objectContaining({ id: "reserve", name: "Quỹ dự phòng" }),
+        ]);
+        const shared = overview.funds.find((fund) => fund.name === "Quỹ Tiết Kiệm")!;
+        expect(shared).toMatchObject({
+          shared: true,
+          canQuickAllocate: false,
+          quickAllocationRestriction: "shared_fund_read_only",
+        });
+        const cryptoFund = overview.funds.find((fund) => fund.id === "btc")!;
+        expect(cryptoFund).toMatchObject({
+          category: "crypto",
+          canQuickAllocate: false,
+          quickAllocationRestriction: "investment_requires_lot_details",
+        });
+        for (const fund of [shared, cryptoFund]) {
+          try {
+            await input.executeTool("propose_finance_batch", {
+              transactions: [],
+              fundAllocations: [{
+                position: 0,
+                fundId: fund.id,
+                year: 2026,
+                month: 7,
+                operation: "increment",
+                amount: 2_000_000,
+              }],
+            });
+          } catch (error) {
+            toolErrors.push(error instanceof Error ? error.message : String(error));
+          }
+        }
+        return {
+          reply: "Mình cần bạn chọn quỹ saving cá nhân hoặc mở màn hình chi tiết quỹ đầu tư.",
+          toolNames: ["get_fund_overview", "propose_finance_batch"],
+          inputTokens: 20,
+          outputTokens: 10,
+        };
+      },
+    };
+    const { app, cookie } = await createAuthenticatedApp({
+      initialData: initial as unknown as StoredFinancePayload,
+      assistantService,
+    });
+    try {
+      const collaborator: UserProfile = {
+        sub: "assistant-collaborator",
+        email: "assistant-collaborator@example.com",
+        name: "Assistant Collaborator",
+        picture: "",
+      };
+      await seedUser(postgres, collaborator, createDefaultStore() as unknown as StoredFinancePayload);
+      const workspace = await app.inject({ method: "GET", url: "/api/data", headers: { cookie } });
+      const shared = await app.inject({
+        method: "POST",
+        url: "/api/shared-funds",
+        headers: { cookie },
+        payload: {
+          fundId: "joint",
+          email: collaborator.email,
+          role: "viewer",
+          expectedRevision: workspace.json().workspaceRevision,
+        },
+      });
+      expect(shared.statusCode).toBe(200);
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/assistant/messages",
+        headers: { cookie },
+        payload: {
+          message: "Hôm nay bỏ 2 triệu vào Quỹ Tiết Kiệm và tháng trước mua 1 BTC",
+          history: [],
+          context: { route: "funds", selectedYear: 2026, selectedMonth: 7 },
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).not.toHaveProperty("proposal");
+      expect(toolErrors).toHaveLength(2);
+      expect(toolErrors[0]).toContain("quỹ chung");
+      expect(toolErrors[0]).toContain("Quỹ dự phòng");
+      expect(toolErrors[1]).toContain("không phải hạn chế Internet");
+      expect(toolErrors[1]).toContain("chi tiết lot");
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe("Fastify SPA production", () => {

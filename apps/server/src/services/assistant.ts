@@ -100,7 +100,7 @@ export const ASSISTANT_FUNCTIONS: FunctionDeclaration[] = [
   },
   {
     name: "get_fund_overview",
-    description: "Đọc quỹ cá nhân và quỹ chung được phép xem cho một tháng.",
+    description: "Đọc quỹ cho một tháng. Khi tạo proposal chỉ được dùng ID trong writableSavingFunds hoặc fund có canQuickAllocate=true; các quỹ khác chỉ để tra cứu.",
     parametersJsonSchema: objectSchema({
       year: { type: "integer" },
       month: { type: "integer", minimum: 1, maximum: 12 },
@@ -135,7 +135,7 @@ export const ASSISTANT_FUNCTIONS: FunctionDeclaration[] = [
         description: "Các lần trích quỹ, để [] nếu không có.",
         items: objectSchema({
           position: { type: "integer", minimum: 0, description: "Thứ tự xuất hiện trong câu, bắt đầu từ 0." },
-          fundId: stringSchema("ID quỹ lấy từ get_fund_overview."),
+          fundId: stringSchema("ID chỉ lấy từ writableSavingFunds của get_fund_overview."),
           year: { type: "integer" },
           month: { type: "integer", minimum: 1, maximum: 12 },
           operation: { type: "string", enum: ["increment", "set"] },
