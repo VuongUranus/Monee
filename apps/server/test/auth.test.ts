@@ -99,6 +99,15 @@ async function login(app: FastifyInstance, code: string, returnTo = "/funds"): P
 }
 
 describe("Fastify API tương thích server cũ", () => {
+  it("trả health check không yêu cầu đăng nhập", async () => {
+    await withApp({}, async ({ app }) => {
+      const response = await app.inject({ method: "GET", url: "/healthz" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ status: "ok" });
+      expect(response.headers["cache-control"]).toBe("no-store");
+    });
+  });
+
   it("đọc cấu hình .env, giữ nguyên chuỗi có dấu # trong ngoặc kép", () => {
     expect(parseDotEnv("# ghi chú\nPORT=3100\nSESSION_SECRET='abc#123'\nAPP_BASE_URL=https://example.com # production\n")).toEqual({
       PORT: "3100",

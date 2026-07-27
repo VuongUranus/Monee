@@ -148,6 +148,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.log.error(error);
     return reply.code(500).type("text/plain").send("Internal server error");
   });
+  // The database connection is verified during Fastify's onReady lifecycle,
+  // so a successful response here means this instance is ready to serve traffic.
+  app.get("/healthz", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    return { status: "ok" };
+  });
   await app.register(authRoutes);
   await app.register(dataRoutes);
   await app.register(marketRoutes);
