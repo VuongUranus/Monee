@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import Fastify from "fastify";
 import { buildApp } from "./application.js";
 import { createConfig, loadEnvironment } from "./lib/config.js";
 
@@ -9,6 +10,7 @@ const env = loadEnvironment(workspaceRoot);
 const config = createConfig(workspaceRoot, env);
 const development = process.argv.includes("--dev");
 const app = await buildApp({
+  fastifyFactory: Fastify,
   workspaceRoot,
   env,
   development,

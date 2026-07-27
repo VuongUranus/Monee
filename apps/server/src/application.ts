@@ -31,6 +31,7 @@ function isDirectNeonUrl(connectionString: string): boolean {
 }
 
 export interface BuildAppOptions {
+  fastifyFactory?: typeof Fastify;
   workspaceRoot?: string;
   databaseUrl?: string;
   webRoot?: string;
@@ -86,7 +87,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   }) as UserDataRepository;
   const sessions = new SessionManager({ config, now, randomBytes });
   const marketService = options.marketService ?? createMarketService({ fetchImpl, now });
-  const app = Fastify({
+  const app = (options.fastifyFactory ?? Fastify)({
     logger: options.logger ?? false,
     bodyLimit: 5 * 1024 * 1024,
   });
