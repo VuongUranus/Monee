@@ -38,16 +38,18 @@ code { font-size: .9em; }
   gap: 30px;
   align-items: flex-start;
   padding: 32px max(24px, calc((100vw - 1320px) / 2));
-  color: var(--paper);
-  background: var(--ink);
-  border-bottom: 4px solid var(--gold);
+  color: #a64d79;
+  background: #fff2cc;
+  border-bottom: 4px solid #f4cccc;
 }
-.masthead h1 { margin: 3px 0 6px; font: 600 clamp(28px, 4vw, 43px)/1.08 var(--font-display); }
-.masthead .sub { max-width: 780px; margin: 0; color: #d4d1c8; line-height: 1.5; }
+.masthead h1 { margin: 3px 0 6px; color: #a64d79; font: 600 clamp(28px, 4vw, 43px)/1.08 var(--font-display); }
+.masthead .sub { max-width: 780px; margin: 0; color: #797877; line-height: 1.5; }
 .eyebrow { margin: 0; color: var(--gold); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; font-weight: 800; }
+.masthead .eyebrow { color: #797877; }
 .account-menu { display: flex; align-items: center; gap: 10px; white-space: nowrap; font-size: 13px; }
-.account-avatar { width: 34px; height: 34px; border-radius: 50%; border: 2px solid rgb(255 255 255 / 50%); }
-.masthead .account-menu .btn { color: var(--paper); background: rgb(255 255 255 / 8%); border-color: rgb(255 255 255 / 22%); box-shadow: none; }
+.account-avatar { width: 34px; height: 34px; border-radius: 50%; border: 2px solid #f4cccc; }
+.masthead .account-menu .btn { color: #a64d79; background: #fff8f5; border-color: #f4cccc; box-shadow: none; }
+.masthead .account-menu .btn:hover:not(:disabled) { color: #a64d79; background: #fdf2f4; border-color: #a64d79; }
 
 .container { max-width: 1320px; margin: 0 auto; padding: 24px; }
 .page-view { min-width: 0; }
