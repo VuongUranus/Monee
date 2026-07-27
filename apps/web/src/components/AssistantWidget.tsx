@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type {
   AssistantEvidence,
   AssistantHistoryTurn,
@@ -237,7 +239,11 @@ export function AssistantWidget() {
           ) : null}
           {messages.map((message) => (
             <article className={`assistant-message ${message.role}`} key={message.id}>
-              <div className="assistant-bubble">{message.text}</div>
+              <div className="assistant-bubble">
+                {message.role === "assistant" ? (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
+                ) : message.text}
+              </div>
               {message.evidence?.length ? (
                 <div className="assistant-evidence" aria-label="Nguồn dữ liệu">
                   {message.evidence.map((item) => <span key={`${item.source}-${item.label}`}>{item.label}</span>)}

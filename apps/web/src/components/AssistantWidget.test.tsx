@@ -140,4 +140,22 @@ describe("AssistantWidget", () => {
     expect(screen.getByText("Bạn muốn làm gì?")).toBeVisible();
     expect(screen.queryByText("Bản xem trước đã sẵn sàng.")).not.toBeInTheDocument();
   });
+
+  it("render Markdown trong phản hồi của trợ lý nhưng giữ tin nhắn người dùng dạng văn bản", async () => {
+    vi.spyOn(api, "sendAssistantMessage").mockResolvedValue({
+      reply: "**Tóm tắt**\n\n- Ăn sáng: 30.000đ\n- Kem đánh răng: 45.000đ\n\n[Xem chi tiết](https://example.com)",
+      evidence: [],
+    });
+    render(<MemoryRouter><AssistantWidget /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Mở trợ lý tài chính" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Nhắn cho trợ lý" }), {
+      target: { value: "Cho tôi xem tóm tắt" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Gửi tin nhắn" }));
+
+    expect((await screen.findByText("Tóm tắt")).tagName).toBe("STRONG");
+    expect(screen.getByRole("list")).toHaveTextContent("Ăn sáng: 30.000đ");
+    expect(screen.getByRole("link", { name: "Xem chi tiết" })).toHaveAttribute("href", "https://example.com");
+    expect(screen.getByText("Cho tôi xem tóm tắt")).toHaveClass("assistant-bubble");
+  });
 });
