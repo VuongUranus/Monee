@@ -10,11 +10,13 @@ const env = loadEnvironment(workspaceRoot);
 const config = createConfig(workspaceRoot, env);
 const development = process.argv.includes("--dev");
 const app = await buildApp({
-  fastifyFactory: Fastify,
+  app: Fastify({
+    logger: development ? { level: "info" } : true,
+    bodyLimit: 5 * 1024 * 1024,
+  }),
   workspaceRoot,
   env,
   development,
-  logger: development ? { level: "info" } : true,
 });
 
 try {
@@ -27,7 +29,3 @@ try {
   app.log.error(error);
   process.exitCode = 1;
 }
-
-// Vercel's Node.js runtime accepts a native HTTP server as a Function export.
-// Keep the listener above for normal Fastify deployments and local production.
-export default app.server;
