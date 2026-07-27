@@ -55,7 +55,9 @@ export function createConfig(
   env: AppEnvironment,
   overrides: Partial<Pick<AppConfig, "databaseUrl" | "host" | "port" | "webRoot">> = {},
 ): AppConfig {
-  const host = overrides.host ?? "127.0.0.1";
+  // Railway (and other PaaS providers) route traffic to an interface exposed by
+  // the process, while local development should remain loopback-only by default.
+  const host = overrides.host ?? env.HOST ?? "127.0.0.1";
   const port = overrides.port ?? Number(env.PORT || 3000);
   const appBaseUrl = (env.APP_BASE_URL || `http://${host}:${port}`).replace(/\/$/, "");
   const googleClientId = env.GOOGLE_CLIENT_ID || "";
