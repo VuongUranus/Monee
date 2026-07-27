@@ -24,4 +24,20 @@ describe("MoneyInput", () => {
     expect(onCommit).not.toHaveBeenCalled();
     expect(input).toHaveClass("input-error");
   });
+
+  it("báo số tiền ngay khi nhập và cho phép xóa giá trị", () => {
+    const onCommit = vi.fn();
+    const onValueChange = vi.fn();
+    render(<MoneyInput value={0} ariaLabel="Số tiền" allowZero={false} onCommit={onCommit} onValueChange={onValueChange} />);
+    const input = screen.getByLabelText("Số tiền");
+
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "150000" } });
+    expect(onValueChange).toHaveBeenLastCalledWith(150_000);
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(onValueChange).toHaveBeenLastCalledWith(0);
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith(0);
+  });
 });

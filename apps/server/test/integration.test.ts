@@ -379,6 +379,95 @@ describe("Fastify CRUD, sharing và market routes", () => {
     }
   });
 
+  it("trả snapshot summary và lịch sử ngay trong response CRUD giao dịch", async () => {
+    const { app, cookie } = await createAuthenticatedApp();
+    try {
+      const initial = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
+      const before = (await app.inject({
+        method: "GET",
+        url: "/api/expenses/summary?year=2026&month=7",
+        headers: { cookie },
+      })).json();
+      const expenseView = {
+        year: 2026,
+        month: 7,
+        transactions: {
+          from: "2026-07-01",
+          to: "2026-07-31",
+          type: "expense",
+          q: "snapshot mutation",
+          page: 1,
+          pageSize: 10,
+        },
+      };
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/transactions",
+        headers: { cookie },
+        payload: {
+          expectedRevision: initial.workspaceRevision,
+          transaction: {
+            id: "snapshot-mutation",
+            date: "2026-07-27",
+            type: "expense",
+            cat: "food",
+            amount: 125_000,
+            note: "snapshot mutation",
+          },
+          expenseView,
+        },
+      });
+      expect(created.statusCode).toBe(200);
+      const createdData = created.json().data;
+      expect(createdData).toMatchObject({
+        transaction: { id: "snapshot-mutation", amount: 125_000 },
+        summary: { year: 2026, month: 7, spent: before.spent + 125_000 },
+        transactions: { total: 1, page: 1, pageSize: 10 },
+      });
+      expect(createdData.transactions.items).toEqual([
+        expect.objectContaining({ id: "snapshot-mutation", note: "snapshot mutation" }),
+      ]);
+
+      const updated = await app.inject({
+        method: "PUT",
+        url: "/api/transactions/snapshot-mutation",
+        headers: { cookie },
+        payload: {
+          expectedRevision: created.json().workspaceRevision,
+          transaction: {
+            date: "2026-07-26",
+            type: "expense",
+            cat: "food",
+            amount: 275_000,
+            note: "snapshot mutation updated",
+          },
+          expenseView,
+        },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json().data).toMatchObject({
+        transaction: { id: "snapshot-mutation", amount: 275_000 },
+        summary: { spent: before.spent + 275_000 },
+        transactions: { total: 1 },
+      });
+
+      const deleted = await app.inject({
+        method: "DELETE",
+        url: "/api/transactions/snapshot-mutation",
+        headers: { cookie },
+        payload: { expectedRevision: updated.json().workspaceRevision, expenseView },
+      });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json().data).toMatchObject({
+        deletedId: "snapshot-mutation",
+        summary: { spent: before.spent },
+        transactions: { items: [], total: 0, page: 1, pageCount: 1 },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("bootstrap nhỏ, phân trang giao dịch và tổng hợp chi tiêu/thống kê ở PostgreSQL", async () => {
     const initialData = createDefaultStore();
     initialData.years["2026"]!.funds.dp![6] = 1_000_000;
@@ -760,6 +849,56 @@ describe("Fastify CRUD, sharing và market routes", () => {
       await app.close();
     }
   });
+
+  it("ghi kỳ trả nợ cùng giao dịch tự động và chỉ cho hoàn tác từ khoản nợ", async () => {
+    const { app, cookie } = await createAuthenticatedApp();
+    try {
+      let workspace = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/debts",
+        headers: { cookie },
+        payload: {
+          expectedRevision: workspace.workspaceRevision,
+          debt: {
+            kind: "installment", name: "Trả góp thử", counterparty: "Cửa hàng", principal: 1_000_000,
+            annualInterestRate: 0, termMonths: 2, paymentAmount: 500_000, firstPaymentDate: "2026-08-01",
+            paymentCategoryId: "other", note: "",
+          },
+        },
+      });
+      expect(created.statusCode).toBe(200);
+      workspace = created.json();
+      const debtId = workspace.data.id;
+      const payment = await app.inject({
+        method: "POST",
+        url: `/api/debts/${debtId}/payments`,
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision, paidAt: "2026-08-01" },
+      });
+      expect(payment.statusCode).toBe(200);
+      workspace = payment.json();
+      const detail = (await app.inject({ method: "GET", url: `/api/debts/${debtId}`, headers: { cookie } })).json();
+      expect(detail.remainingBalance).toBe(500_000);
+      expect(detail.payments).toContainEqual(expect.objectContaining({ installment: 1, transactionId: `debt-${debtId}-1` }));
+      const locked = await app.inject({
+        method: "DELETE",
+        url: `/api/transactions/debt-${debtId}-1`,
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision },
+      });
+      expect(locked.statusCode).toBe(409);
+      const undone = await app.inject({
+        method: "DELETE",
+        url: `/api/debts/${debtId}/payments/${detail.payments[0].id}`,
+        headers: { cookie },
+        payload: { expectedRevision: workspace.workspaceRevision },
+      });
+      expect(undone.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe("Fastify SPA production", () => {
@@ -775,7 +914,7 @@ describe("Fastify SPA production", () => {
 
     const app = await buildApp({ workspaceRoot: directory, repository: postgres.repository, database: postgres.client.db, webRoot, env: {} });
     try {
-      for (const route of ["/funds", "/expenses", "/statistics"]) {
+      for (const route of ["/funds", "/expenses", "/statistics", "/debts"]) {
         const response = await app.inject({ method: "GET", url: route });
         expect(response.statusCode).toBe(200);
         expect(response.headers["cache-control"]).toBe("no-store");

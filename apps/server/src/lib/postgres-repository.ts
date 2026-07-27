@@ -3,6 +3,9 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import type {
   ExpenseConfigResponse,
   ExpenseMonthSummaryResponse,
+  ExpenseTransactionView,
+  DebtDetailResponse,
+  DebtOverviewResponse,
   FinanceBootstrapResponse,
   FundMonthDetailResponse,
   FundOverviewResponse,
@@ -14,6 +17,7 @@ import type {
   StoredFinancePayload,
   TransactionPageResponse,
   TransactionQuery,
+  TransactionMutationResult,
   UserProfile,
 } from "@chi-tieu/shared";
 import { createDefaultStore } from "@chi-tieu/shared";
@@ -34,8 +38,10 @@ import {
   readStatistics,
   readTransactions,
 } from "../db/resource-queries.js";
+import { readDebtDetail, readDebtOverview } from "../db/debt-queries.js";
 import {
   mutatePersonalResource,
+  mutatePersonalResourceWithResult,
   mutateSharedResource,
 } from "../db/resource-mutations.js";
 import * as schema from "../db/schema.js";
@@ -43,6 +49,7 @@ import {
   SharedFundError,
   cleanUserProfile,
   type PersonalMutationCommand,
+  type TransactionMutationCommand,
   type SharedMutationCommand,
   type UserDataRepository,
 } from "./repository.js";
@@ -124,6 +131,14 @@ export class PostgresUserRepository implements UserDataRepository {
     return readTransactions(this.#db, userId, query);
   }
 
+  getDebtOverview(userId: string): Promise<DebtOverviewResponse> {
+    return readDebtOverview(this.#db, userId);
+  }
+
+  getDebtDetail(userId: string, debtId: string): Promise<DebtDetailResponse> {
+    return readDebtDetail(this.#db, userId, debtId);
+  }
+
   getFundOverview(userId: string, year: number, month: number): Promise<FundOverviewResponse> {
     return readFundOverview(this.#db, userId, year, month);
   }
@@ -155,6 +170,31 @@ export class PostgresUserRepository implements UserDataRepository {
     command: PersonalMutationCommand,
   ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<T>> {
     return mutatePersonalResource<T>(this.#db, userId, expectedRevision, command);
+  }
+
+  mutateTransaction(
+    userId: string,
+    expectedRevision: number,
+    command: TransactionMutationCommand,
+    expenseView: ExpenseTransactionView,
+  ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<TransactionMutationResult>> {
+    return mutatePersonalResourceWithResult<
+      import("@chi-tieu/shared").Transaction | import("@chi-tieu/shared").DeleteMutationResult,
+      TransactionMutationResult
+    >(this.#db, userId, expectedRevision, command, async (tx, mutation) => {
+      // Drizzle exposes the transaction as a narrower type than the database,
+      // while these read helpers only use the shared query executor surface.
+      const executor = tx as unknown as FinanceDatabase;
+      const [summary, transactions] = await Promise.all([
+        readExpenseSummary(executor, userId, expenseView.year, expenseView.month),
+        readTransactions(executor, userId, expenseView.transactions),
+      ]);
+      return {
+        ...("deletedId" in mutation ? { deletedId: mutation.deletedId } : { transaction: mutation }),
+        summary,
+        transactions,
+      };
+    });
   }
 
   mutateSharedResource<T>(

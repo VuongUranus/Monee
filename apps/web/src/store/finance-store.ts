@@ -1,6 +1,9 @@
 import type {
   ExpenseConfigResponse,
   ExpenseMonthSummaryResponse,
+  ExpenseTransactionView,
+  DebtDetailResponse,
+  DebtOverviewResponse,
   FinanceBootstrapResponse,
   FinanceStore,
   FundMonthDetailResponse,
@@ -14,6 +17,8 @@ import type {
   StatisticsResponse,
   StatisticsScope,
   TransactionPageResponse,
+  Transaction,
+  TransactionMutationResult,
   TransactionQuery,
   UserProfile,
 } from "@chi-tieu/shared";
@@ -36,6 +41,7 @@ type RefreshPolicy = "route" | "none";
 
 interface MutationOptions<T> {
   refresh?: RefreshPolicy;
+  invalidateExpenseConfig?: boolean;
   reconcile?: (state: Draft<FinanceState>, data: T) => void;
 }
 
@@ -53,9 +59,12 @@ interface FinanceState {
   fundOverview: FundOverviewResponse | null;
   fundDetails: Record<string, FundMonthDetailResponse>;
   statistics: StatisticsResponse | null;
+  debtOverview: DebtOverviewResponse | null;
+  debtDetails: Record<string, DebtDetailResponse>;
   expensesState: ResourceState;
   fundsState: ResourceState;
   statisticsState: ResourceState;
+  debtsState: ResourceState;
   loaded: boolean;
   selectedYear: number;
   selectedMonth: number;
@@ -69,6 +78,8 @@ interface FinanceState {
   bootstrap(): Promise<void>;
   loadExpenses(query?: Partial<TransactionQuery>): Promise<void>;
   loadTransactions(query: TransactionQuery): Promise<void>;
+  loadDebts(): Promise<void>;
+  loadDebtDetail(debtId: string): Promise<DebtDetailResponse | null>;
   loadFunds(fresh?: boolean): Promise<void>;
   loadFundDetail(fundId: string): Promise<FundMonthDetailResponse | null>;
   loadStatistics(scope?: StatisticsScope): Promise<void>;
@@ -82,6 +93,13 @@ interface FinanceState {
     request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
     options?: MutationOptions<T>,
   ): void;
+  mutateExpenseConfig<T>(
+    recipe: (draft: Draft<FinanceStore>) => void,
+    request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
+  ): void;
+  createTransaction(transaction: Transaction): void;
+  updateTransaction(transaction: Transaction): void;
+  deleteTransaction(id: string): void;
   mutateSharedLedger<T>(
     fundId: string,
     recipe: (draft: Draft<FinanceStore>) => void,
@@ -104,6 +122,7 @@ let periodSelectionVersion = 0;
 let expensesRequest = 0;
 let fundsRequest = 0;
 let statisticsRequest = 0;
+let debtsRequest = 0;
 
 class CancelledMutationError extends Error {}
 
@@ -118,6 +137,18 @@ function monthBounds(year: number, monthIndex: number): { from: string; to: stri
     from: `${year}-${String(month).padStart(2, "0")}-01`,
     to: new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10),
   };
+}
+
+function sameTransactionQuery(left: TransactionQuery | null, right: TransactionQuery): boolean {
+  if (!left) return false;
+  return left.from === right.from
+    && left.to === right.to
+    && left.type === right.type
+    && left.categoryId === right.categoryId
+    && left.accountId === right.accountId
+    && left.q === right.q
+    && (left.page ?? 1) === (right.page ?? 1)
+    && (left.pageSize ?? 10) === (right.pageSize ?? 10);
 }
 
 function detailKey(fundId: string, year: number, month: number): string {
@@ -260,6 +291,8 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       state.fundOverview = null;
       state.fundDetails = {};
       state.statistics = null;
+      state.debtOverview = null;
+      state.debtDetails = {};
       state.sharedFunds = {};
     });
   };
@@ -267,6 +300,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
   const refreshCurrentRoute = async (preserveTransactionQuery = false): Promise<void> => {
     if (location.pathname === "/funds") await get().loadFunds(true);
     else if (location.pathname === "/statistics") await get().loadStatistics();
+    else if (location.pathname === "/debts") await get().loadDebts();
     else await get().loadExpenses(preserveTransactionQuery ? get().transactionQuery ?? {} : {});
   };
 
@@ -308,9 +342,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
         set((state) => {
           state.workspaceRevision = response.workspaceRevision;
           if (state.bootstrapData) state.bootstrapData.workspaceRevision = response.workspaceRevision;
-          // CRUD danh mục/tài khoản dùng chung mutation queue; buộc lần tải màn hình
-          // chi tiêu kế tiếp lấy config mới thay vì ghi đè optimistic state bằng cache cũ.
-          state.expenseConfig = null;
+          if (options.invalidateExpenseConfig) state.expenseConfig = null;
           options.reconcile?.(state as Draft<FinanceState>, response.data);
         });
         await refreshWhenSettled(mutationVersion);
@@ -346,6 +378,53 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     });
   };
 
+  const currentExpenseView = (): ExpenseTransactionView => {
+    const { selectedYear: year, selectedMonth, transactionQuery } = get();
+    return {
+      year,
+      month: selectedMonth + 1,
+      transactions: structuredClone(transactionQuery ?? {
+        ...monthBounds(year, selectedMonth),
+        page: 1,
+        pageSize: 10,
+      }),
+    };
+  };
+
+  const applyTransactionSnapshot = (
+    state: Draft<FinanceState>,
+    expenseView: ExpenseTransactionView,
+    snapshot: TransactionMutationResult,
+  ): void => {
+    const isCurrentPeriod = state.selectedYear === expenseView.year
+      && state.selectedMonth + 1 === expenseView.month;
+    if (isCurrentPeriod) state.expenseSummary = structuredClone(snapshot.summary);
+    if (!sameTransactionQuery(state.transactionQuery, expenseView.transactions)) return;
+    state.transactionPage = structuredClone(snapshot.transactions);
+    state.transactionQuery = structuredClone(expenseView.transactions);
+    state.ledger.expense.txns = structuredClone(snapshot.transactions.items);
+    state.expensesState = "ready";
+  };
+
+  const persistTransaction = (
+    recipe: (draft: Draft<FinanceStore>) => void,
+    request: (view: ExpenseTransactionView, expectedRevision: number) => Promise<PersonalMutationResponse<TransactionMutationResult>>,
+    updateCurrentPage?: (page: Draft<TransactionPageResponse>) => void,
+  ): void => {
+    const expenseView = currentExpenseView();
+    if (updateCurrentPage) {
+      set((state) => {
+        if (sameTransactionQuery(state.transactionQuery, expenseView.transactions) && state.transactionPage) {
+          updateCurrentPage(state.transactionPage);
+        }
+      });
+    }
+    persist(recipe, (expectedRevision) => request(expenseView, expectedRevision), {
+      refresh: "none",
+      reconcile: (state, snapshot) => applyTransactionSnapshot(state, expenseView, snapshot),
+    });
+  };
+
   return {
     auth: "checking",
     authMessage: "",
@@ -360,9 +439,12 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     fundOverview: null,
     fundDetails: {},
     statistics: null,
+    debtOverview: null,
+    debtDetails: {},
     expensesState: "idle",
     fundsState: "idle",
     statisticsState: "idle",
+    debtsState: "idle",
     loaded: false,
     selectedYear: currentPeriod().year,
     selectedMonth: currentPeriod().month,
@@ -473,6 +555,38 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       }
     },
 
+    async loadDebts() {
+      const requestId = ++debtsRequest;
+      set((state) => { state.debtsState = "loading"; });
+      try {
+        const configPromise = get().expenseConfig ? Promise.resolve(get().expenseConfig!) : api.loadExpenseConfig();
+        const [overview, config] = await Promise.all([api.loadDebts(), configPromise]);
+        if (requestId !== debtsRequest) return;
+        applyExpenseConfig(config);
+        set((state) => {
+          state.debtOverview = overview;
+          state.debtDetails = {};
+          state.debtsState = "ready";
+        });
+      } catch (error) {
+        if (error instanceof UnauthorizedError) markUnauthorized();
+        if (requestId === debtsRequest) set((state) => { state.debtsState = "error"; });
+      }
+    },
+
+    async loadDebtDetail(debtId) {
+      const cached = get().debtDetails[debtId];
+      if (cached) return cached;
+      try {
+        const detail = await api.loadDebtDetail(debtId);
+        set((state) => { state.debtDetails[debtId] = detail; });
+        return detail;
+      } catch (error) {
+        if (error instanceof UnauthorizedError) markUnauthorized();
+        return null;
+      }
+    },
+
     async loadFunds(fresh = false) {
       const requestId = ++fundsRequest;
       const { selectedYear: year, selectedMonth } = get();
@@ -535,7 +649,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
 
     beginLogin() {
       const current = location.pathname;
-      const returnTo = ["/funds", "/expenses", "/statistics"].includes(current) ? current : "/expenses";
+      const returnTo = ["/funds", "/expenses", "/statistics", "/debts"].includes(current) ? current : "/expenses";
       location.assign(`/api/auth/google?returnTo=${encodeURIComponent(returnTo)}`);
     },
 
@@ -620,6 +734,32 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
 
     mutateLedger(recipe, request, options) {
       persist(recipe, request, options);
+    },
+
+    mutateExpenseConfig(recipe, request) {
+      persist(recipe, request, { invalidateExpenseConfig: true });
+    },
+
+    createTransaction(transaction) {
+      persistTransaction((draft) => {
+        draft.expense.txns.push(transaction);
+      }, (expenseView, expectedRevision) => api.createTransaction(transaction, expenseView, expectedRevision));
+    },
+
+    updateTransaction(transaction) {
+      persistTransaction((draft) => {
+        const index = draft.expense.txns.findIndex((item) => item.id === transaction.id);
+        if (index >= 0) draft.expense.txns[index] = transaction;
+      }, (expenseView, expectedRevision) => api.updateTransaction(transaction.id, transaction, expenseView, expectedRevision), (page) => {
+        const index = page.items.findIndex((item) => item.id === transaction.id);
+        if (index >= 0) page.items[index] = transaction;
+      });
+    },
+
+    deleteTransaction(id) {
+      persistTransaction((draft) => {
+        draft.expense.txns = draft.expense.txns.filter((item) => item.id !== id);
+      }, (expenseView, expectedRevision) => api.deleteTransaction(id, expenseView, expectedRevision));
     },
 
     async mutateSharedLedger(fundId, recipe, request, options = {}) {

@@ -1,10 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import type {
+  DebtCreateRequest,
+  DebtPatchRequest,
+  ExpenseTransactionView,
   FundDetail,
   TransactionType,
 } from "@chi-tieu/shared";
 import { z } from "zod";
-import { SharedFundError, type PersonalMutationCommand } from "../lib/repository.js";
+import { SharedFundError, type PersonalMutationCommand, type TransactionMutationCommand } from "../lib/repository.js";
 
 const revision = z.number().int().positive();
 const money = z.number().finite().nonnegative();
@@ -14,7 +17,23 @@ const monthSchema = z.coerce.number().int().min(1).max(12);
 const roleSchema = z.enum(["viewer", "editor"]);
 const fundCategorySchema = z.enum(["saving", "stock", "gold", "crypto"]);
 const transactionTypeSchema = z.enum(["income", "expense"]);
+const debtKindSchema = z.enum(["borrowed", "lent", "credit_card", "installment"]);
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const transactionQuerySchema = z.object({
+  from: dateSchema,
+  to: dateSchema,
+  type: transactionTypeSchema.optional(),
+  categoryId: z.string().min(1).optional(),
+  accountId: z.string().min(1).optional(),
+  q: z.string().max(500).optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(10),
+});
+const expenseTransactionViewSchema = z.object({
+  year: yearSchema,
+  month: monthSchema,
+  transactions: transactionQuerySchema,
+});
 
 function sendError(reply: any, error: unknown): any {
   if (error instanceof SharedFundError) return reply.code(error.statusCode).send({ error: error.code, message: error.message });
@@ -41,6 +60,9 @@ function sendReadError(reply: any, error: unknown): any {
   if (error instanceof Error && error.message === "fund_not_found") {
     return reply.code(404).send({ error: "fund_not_found", message: "Không tìm thấy quỹ." });
   }
+  if (error instanceof Error && error.message === "debt_not_found") {
+    return reply.code(404).send({ error: "debt_not_found", message: "Không tìm thấy khoản vay/nợ." });
+  }
   if (error instanceof Error && error.message === "forbidden") {
     return reply.code(403).send({ error: "forbidden", message: "Bạn không có quyền thực hiện thao tác này." });
   }
@@ -54,6 +76,38 @@ async function personal(
   command: PersonalMutationCommand,
 ): Promise<unknown> {
   return app.finance.repository.mutatePersonalResource(userId, expectedRevision, command);
+}
+
+async function transactionMutation(
+  app: any,
+  userId: string,
+  expectedRevision: number,
+  command: TransactionMutationCommand,
+  expenseView?: ExpenseTransactionView,
+): Promise<unknown> {
+  // Keep direct API consumers working during the frontend/backend rollout. The
+  // optimized screen always sends expenseView and receives the fresh snapshot.
+  if (!expenseView) return personal(app, userId, expectedRevision, command);
+  return app.finance.repository.mutateTransaction(userId, expectedRevision, command, expenseView);
+}
+
+function normalizeExpenseTransactionView(value: z.infer<typeof expenseTransactionViewSchema> | undefined): ExpenseTransactionView | undefined {
+  if (!value) return undefined;
+  const query = value.transactions;
+  return {
+    year: value.year,
+    month: value.month,
+    transactions: {
+      from: query.from,
+      to: query.to,
+      page: query.page,
+      pageSize: query.pageSize,
+      ...(query.type ? { type: query.type } : {}),
+      ...(query.categoryId ? { categoryId: query.categoryId } : {}),
+      ...(query.accountId ? { accountId: query.accountId } : {}),
+      ...(query.q ? { q: query.q } : {}),
+    },
+  };
 }
 
 export const dataRoutes: FastifyPluginAsync = async (app) => {
@@ -105,6 +159,20 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
       ...(parsed.accountId ? { accountId: parsed.accountId } : {}),
       ...(parsed.q ? { q: parsed.q } : {}),
     });
+  });
+
+  app.get("/api/debts", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    return app.finance.repository.getDebtOverview(userId);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/debts/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    try {
+      return await app.finance.repository.getDebtDetail(userId, request.params.id);
+    } catch (error) { return sendReadError(reply, error); }
   });
 
   app.get<{ Querystring: unknown }>("/api/funds/overview", async (request, reply) => {
@@ -400,9 +468,10 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
         amount: positiveMoney,
         note: z.string().max(10_000),
       }),
+      expenseView: expenseTransactionViewSchema.optional(),
     }), request.body);
     try {
-      return await personal(app, userId, parsed.expectedRevision, {
+      return await transactionMutation(app, userId, parsed.expectedRevision, {
         kind: "createTransaction",
         transaction: {
           ...(parsed.transaction.id ? { id: parsed.transaction.id } : {}),
@@ -413,6 +482,113 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
           amount: parsed.transaction.amount,
           note: parsed.transaction.note,
         },
+      }, normalizeExpenseTransactionView(parsed.expenseView));
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Body: unknown }>("/api/debts", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      debt: z.object({
+        kind: debtKindSchema,
+        name: z.string().trim().min(1).max(200),
+        counterparty: z.string().trim().max(200).default(""),
+        principal: positiveMoney,
+        annualInterestRate: z.number().finite().nonnegative().default(0),
+        termMonths: z.number().int().positive(),
+        paymentAmount: positiveMoney,
+        firstPaymentDate: z.string().date(),
+        paymentCategoryId: z.string().min(1),
+        paymentAccountId: z.string().min(1).optional(),
+        note: z.string().max(10_000).default(""),
+      }),
+    }), request.body);
+    try {
+      const input: Omit<DebtCreateRequest, "expectedRevision">["debt"] = {
+        kind: parsed.debt.kind,
+        name: parsed.debt.name,
+        counterparty: parsed.debt.counterparty,
+        principal: parsed.debt.principal,
+        annualInterestRate: parsed.debt.annualInterestRate,
+        termMonths: parsed.debt.termMonths,
+        paymentAmount: parsed.debt.paymentAmount,
+        firstPaymentDate: parsed.debt.firstPaymentDate,
+        paymentCategoryId: parsed.debt.paymentCategoryId,
+        ...(parsed.debt.paymentAccountId ? { paymentAccountId: parsed.debt.paymentAccountId } : {}),
+        note: parsed.debt.note,
+      };
+      return await personal(app, userId, parsed.expectedRevision, { kind: "createDebt", input });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.patch<{ Params: { id: string }; Body: unknown }>("/api/debts/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      debt: z.object({
+        kind: debtKindSchema.optional(),
+        name: z.string().trim().min(1).max(200).optional(),
+        counterparty: z.string().trim().max(200).optional(),
+        principal: positiveMoney.optional(),
+        annualInterestRate: z.number().finite().nonnegative().optional(),
+        termMonths: z.number().int().positive().optional(),
+        paymentAmount: positiveMoney.optional(),
+        firstPaymentDate: z.string().date().nullable().optional(),
+        paymentCategoryId: z.string().min(1).optional(),
+        paymentAccountId: z.string().min(1).or(z.literal("")).nullable().optional(),
+        note: z.string().max(10_000).optional(),
+      }).refine((value) => Object.keys(value).length > 0),
+    }), request.body);
+    try {
+      const { firstPaymentDate, paymentAccountId, ...fields } = parsed.debt;
+      const debt = {
+        ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)),
+        ...(firstPaymentDate !== undefined ? { firstPaymentDate: firstPaymentDate ?? "" } : {}),
+        ...(paymentAccountId !== undefined ? { paymentAccountId: paymentAccountId ?? "" } : {}),
+      } as Omit<DebtPatchRequest, "expectedRevision">["debt"];
+      return await personal(app, userId, parsed.expectedRevision, { kind: "updateDebt", id: request.params.id, patch: debt });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string }; Body: unknown }>("/api/debts/:id", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, { kind: "deleteDebt", id: request.params.id });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.post<{ Params: { id: string }; Body: unknown }>("/api/debts/:id/payments", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({
+      expectedRevision: revision,
+      paidAt: z.string().date(),
+      note: z.string().max(10_000).optional(),
+    }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "recordDebtPayment",
+        id: request.params.id,
+        paidAt: parsed.paidAt,
+        note: parsed.note ?? "",
+      });
+    } catch (error) { return sendError(reply, error); }
+  });
+
+  app.delete<{ Params: { id: string; paymentId: string }; Body: unknown }>("/api/debts/:id/payments/:paymentId", async (request, reply) => {
+    const userId = sessionUser(app, request, reply);
+    if (!userId) return reply;
+    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    try {
+      return await personal(app, userId, parsed.expectedRevision, {
+        kind: "deleteDebtPayment",
+        id: request.params.id,
+        paymentId: request.params.paymentId,
       });
     } catch (error) { return sendError(reply, error); }
   });
@@ -430,9 +606,10 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
         amount: positiveMoney,
         note: z.string().max(10_000),
       }),
+      expenseView: expenseTransactionViewSchema.optional(),
     }), request.body);
     try {
-      return await personal(app, userId, parsed.expectedRevision, {
+      return await transactionMutation(app, userId, parsed.expectedRevision, {
         kind: "updateTransaction",
         id: request.params.id,
         transaction: {
@@ -443,19 +620,19 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
           amount: parsed.transaction.amount,
           note: parsed.transaction.note,
         },
-      });
+      }, normalizeExpenseTransactionView(parsed.expenseView));
     } catch (error) { return sendError(reply, error); }
   });
 
   app.delete<{ Params: { id: string }; Body: unknown }>("/api/transactions/:id", async (request, reply) => {
     const userId = sessionUser(app, request, reply);
     if (!userId) return reply;
-    const parsed = body(z.object({ expectedRevision: revision }), request.body);
+    const parsed = body(z.object({ expectedRevision: revision, expenseView: expenseTransactionViewSchema.optional() }), request.body);
     try {
-      return await personal(app, userId, parsed.expectedRevision, {
+      return await transactionMutation(app, userId, parsed.expectedRevision, {
         kind: "deleteTransaction",
         id: request.params.id,
-      });
+      }, normalizeExpenseTransactionView(parsed.expenseView));
     } catch (error) { return sendError(reply, error); }
   });
 

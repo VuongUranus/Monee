@@ -3,6 +3,7 @@ import type {
   Account,
   AccountType,
   CryptoMatch,
+  Debt,
   FinanceCategory,
   FinanceStore,
   Fund,
@@ -802,6 +803,10 @@ export async function replacePersonalStore(
 ): Promise<WriteStoreResult> {
   const { store } = normalizeStore(payload);
 
+  const existingDebtIds = (await tx.select({ id: schema.debts.id }).from(schema.debts)
+    .where(eq(schema.debts.userId, userId))).map((row: { id: string }) => row.id);
+  if (existingDebtIds.length) await tx.delete(schema.debtPayments).where(inArray(schema.debtPayments.debtId, existingDebtIds));
+  await tx.delete(schema.debts).where(eq(schema.debts.userId, userId));
   await tx.delete(schema.transactions).where(eq(schema.transactions.userId, userId));
   await tx.delete(schema.accounts).where(eq(schema.accounts.userId, userId));
   await tx.delete(schema.accountTypes).where(eq(schema.accountTypes.userId, userId));
@@ -937,8 +942,8 @@ export async function replacePersonalStore(
   const insertedAccounts = accountRows.length ? await tx.insert(schema.accounts).values(accountRows).returning() : [];
   const accountIds = new Map<string, string>(insertedAccounts.map((row: typeof schema.accounts.$inferSelect) => [row.externalId, row.id]));
 
-  if (store.expense.txns.length) {
-    await tx.insert(schema.transactions).values(store.expense.txns.map((transaction) => ({
+  const insertedTransactions = store.expense.txns.length
+    ? await tx.insert(schema.transactions).values(store.expense.txns.map((transaction) => ({
       externalId: transaction.id,
       userId,
       categoryId: categoryIds.get(`${transaction.type}:${transaction.cat}`)!,
@@ -947,6 +952,43 @@ export async function replacePersonalStore(
       type: transaction.type,
       amount: Math.round(transaction.amount),
       note: transaction.note,
+    }))).returning({ id: schema.transactions.id, externalId: schema.transactions.externalId })
+    : [];
+  const transactionIds = new Map(insertedTransactions.map((row: { id: string; externalId: string }) => [row.externalId, row.id]));
+
+  const insertedDebts = store.debts.length
+    ? await tx.insert(schema.debts).values(store.debts.map((debt) => ({
+      externalId: debt.id,
+      userId,
+      kind: debt.kind,
+      name: debt.name,
+      counterparty: debt.counterparty,
+      principal: debt.principal,
+      annualInterestRate: debt.annualInterestRate,
+      termMonths: debt.termMonths,
+      paymentAmount: debt.paymentAmount,
+      firstPaymentDate: debt.firstPaymentDate ?? null,
+      paymentCategoryId: debt.paymentCategoryId
+        ? categoryIds.get(`${debt.kind === "lent" ? "income" : "expense"}:${debt.paymentCategoryId}`) ?? null
+        : null,
+      paymentAccountId: debt.paymentAccountId ? accountIds.get(debt.paymentAccountId) ?? null : null,
+      note: debt.note,
+      status: debt.status,
+    }))).returning({ id: schema.debts.id, externalId: schema.debts.externalId })
+    : [];
+  const debtIds = new Map(insertedDebts.map((row: { id: string; externalId: string }) => [row.externalId, row.id]));
+  const paymentRows = store.debts.flatMap((debt) => debt.payments.map((payment) => ({ debt, payment })));
+  if (paymentRows.length) {
+    await tx.insert(schema.debtPayments).values(paymentRows.map(({ debt, payment }) => ({
+      externalId: payment.id,
+      debtId: debtIds.get(debt.id)!,
+      installment: payment.installment,
+      paidAt: payment.paidAt,
+      amount: payment.amount,
+      principalAmount: payment.principalAmount,
+      interestAmount: payment.interestAmount,
+      transactionId: payment.transactionId ? transactionIds.get(payment.transactionId) ?? null : null,
+      note: payment.note,
     })));
   }
 
@@ -1153,6 +1195,8 @@ export async function assemblePersonalStore(db: Executor, userId: string): Promi
     typeRows,
     accountRows,
     transactionRows,
+    debtRows,
+    debtPaymentRows,
     prices,
     fxRows,
     goldRows,
@@ -1173,6 +1217,11 @@ export async function assemblePersonalStore(db: Executor, userId: string): Promi
     db.select().from(schema.accountTypes).where(eq(schema.accountTypes.userId, userId)).orderBy(asc(schema.accountTypes.position)),
     db.select().from(schema.accounts).where(eq(schema.accounts.userId, userId)).orderBy(asc(schema.accounts.position)),
     db.select().from(schema.transactions).where(eq(schema.transactions.userId, userId)),
+    db.select().from(schema.debts).where(eq(schema.debts.userId, userId)).orderBy(asc(schema.debts.createdAt)),
+    db.select().from(schema.debtPayments)
+      .innerJoin(schema.debts, eq(schema.debtPayments.debtId, schema.debts.id))
+      .where(eq(schema.debts.userId, userId))
+      .orderBy(asc(schema.debtPayments.installment)),
     db.select().from(schema.legacyPrices).where(eq(schema.legacyPrices.userId, userId)),
     db.select().from(schema.marketFxQuotes).where(eq(schema.marketFxQuotes.userId, userId)),
     db.select().from(schema.marketGoldQuotes).where(eq(schema.marketGoldQuotes.userId, userId)),
@@ -1285,6 +1334,45 @@ export async function assemblePersonalStore(db: Executor, userId: string): Promi
     ...(row.accountId ? { accountId: accountRows.find((item: typeof schema.accounts.$inferSelect) => item.id === row.accountId)?.externalId } : {}),
     amount: row.amount,
     note: row.note,
+  }));
+  const transactionExternalById = new Map<string, string>(transactionRows.map((row: typeof schema.transactions.$inferSelect) => [row.id, row.externalId]));
+  const paymentRowsByDebt = new Map<string, Array<typeof schema.debtPayments.$inferSelect>>();
+  for (const entry of debtPaymentRows as Array<{ debt_payments: typeof schema.debtPayments.$inferSelect }>) {
+    const rows = paymentRowsByDebt.get(entry.debt_payments.debtId) ?? [];
+    rows.push(entry.debt_payments);
+    paymentRowsByDebt.set(entry.debt_payments.debtId, rows);
+  }
+  store.debts = (debtRows as Array<typeof schema.debts.$inferSelect>).map((debt): Debt => ({
+    id: debt.externalId,
+    kind: debt.kind as Debt["kind"],
+    name: debt.name,
+    counterparty: debt.counterparty,
+    principal: debt.principal,
+    annualInterestRate: debt.annualInterestRate,
+    termMonths: debt.termMonths,
+    paymentAmount: debt.paymentAmount,
+    ...(debt.firstPaymentDate ? { firstPaymentDate: debt.firstPaymentDate } : {}),
+    ...(debt.paymentCategoryId ? {
+      paymentCategoryId: categoryRows.find((category: typeof schema.financeCategories.$inferSelect) => category.id === debt.paymentCategoryId)?.externalId,
+    } : {}),
+    ...(debt.paymentAccountId ? {
+      paymentAccountId: accountRows.find((account: typeof schema.accounts.$inferSelect) => account.id === debt.paymentAccountId)?.externalId,
+    } : {}),
+    note: debt.note,
+    status: debt.status as Debt["status"],
+    payments: (paymentRowsByDebt.get(debt.id) ?? []).map((payment) => {
+      const transactionId = payment.transactionId ? transactionExternalById.get(payment.transactionId) : undefined;
+      return {
+        id: payment.externalId,
+        installment: payment.installment,
+        paidAt: payment.paidAt,
+        amount: payment.amount,
+        principalAmount: payment.principalAmount,
+        interestAmount: payment.interestAmount,
+        ...(transactionId ? { transactionId } : {}),
+        note: payment.note,
+      };
+    }),
   }));
 
   store.prices = Object.fromEntries(prices.map((row: typeof schema.legacyPrices.$inferSelect) => [row.symbol, row.price]));

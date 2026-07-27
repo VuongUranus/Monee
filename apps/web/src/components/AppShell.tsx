@@ -19,6 +19,10 @@ const pageCopy = {
     title: "Thống kê tài chính",
     subtitle: "Tổng hợp thu, chi và tích lũy theo năm để theo dõi xu hướng tài chính cá nhân.",
   },
+  debts: {
+    title: "Quản lý vay & nợ",
+    subtitle: "Theo dõi dư nợ, kỳ hạn, lịch thanh toán và các khoản cần thu hồi.",
+  },
 };
 
 export function AppShell({ children }: PropsWithChildren) {
@@ -114,7 +118,7 @@ export function AppShell({ children }: PropsWithChildren) {
 
       <main className="container">
         <section className="toolbar top-toolbar">
-          {page !== "statistics" ? (
+          {page !== "statistics" && page !== "debts" ? (
             <div className="period-main">
               <button className="btn period-nav-btn" type="button" aria-label="Tháng trước" onClick={() => moveMonth(-1)}>
                 <svg className="period-nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m9.75 3.25-4.5 4.5 4.5 4.5" /></svg>
@@ -188,6 +192,7 @@ export function AppShell({ children }: PropsWithChildren) {
           <NavLink className={({ isActive }) => `page-link ${isActive ? "active" : ""}`} to="/expenses">Chi tiêu</NavLink>
           <NavLink className={({ isActive }) => `page-link ${isActive ? "active" : ""}`} to="/funds">Quỹ</NavLink>
           <NavLink className={({ isActive }) => `page-link ${isActive ? "active" : ""}`} to="/statistics">Thống kê</NavLink>
+          <NavLink className={({ isActive }) => `page-link ${isActive ? "active" : ""}`} to="/debts">Vay & nợ</NavLink>
         </nav>
 
         {children}

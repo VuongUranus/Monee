@@ -122,6 +122,79 @@ export interface Transaction {
   note: string;
 }
 
+export type DebtKind = "borrowed" | "lent" | "credit_card" | "installment";
+export type DebtStatus = "active" | "settled";
+
+/** A payment is always an installment in the debt's fixed monthly schedule. */
+export interface DebtPayment {
+  id: string;
+  installment: number;
+  paidAt: string;
+  amount: number;
+  principalAmount: number;
+  interestAmount: number;
+  /** Automatically generated income/expense transaction, when configured. */
+  transactionId?: string;
+  note: string;
+}
+
+/**
+ * `termMonths = 0` and no `firstPaymentDate` identify a legacy balance that
+ * needs its schedule completed by the user before payments can be recorded.
+ */
+export interface Debt {
+  id: string;
+  kind: DebtKind;
+  name: string;
+  counterparty: string;
+  principal: number;
+  annualInterestRate: number;
+  termMonths: number;
+  paymentAmount: number;
+  firstPaymentDate?: string;
+  paymentCategoryId?: string;
+  paymentAccountId?: string;
+  note: string;
+  status: DebtStatus;
+  payments: DebtPayment[];
+}
+
+export interface DebtScheduleItem {
+  installment: number;
+  dueDate: string;
+  amount: number;
+  principalAmount: number;
+  interestAmount: number;
+  payment?: DebtPayment;
+}
+
+export interface DebtSummary {
+  liabilities: number;
+  receivables: number;
+  netDebt: number;
+  overdueCount: number;
+  dueSoonCount: number;
+}
+
+export interface DebtOverviewItem extends Omit<Debt, "payments"> {
+  remainingBalance: number;
+  expectedInterest: number;
+  nextPayment?: DebtScheduleItem;
+  overdue: boolean;
+  dueSoon: boolean;
+  needsSetup: boolean;
+}
+
+export interface DebtOverviewResponse {
+  summary: DebtSummary;
+  items: DebtOverviewItem[];
+}
+
+export interface DebtDetailResponse extends DebtOverviewItem {
+  payments: DebtPayment[];
+  schedule: DebtScheduleItem[];
+}
+
 export interface ExpenseLedger {
   cats: FinanceCategory[];
   incomeCats: FinanceCategory[];
@@ -212,6 +285,7 @@ export interface FinanceStore {
   market: StoredMarketState;
   onboarding: OnboardingState;
   financialProfile: FinancialProfile;
+  debts: Debt[];
   incomeMigrationVersion?: number;
   futureIncomeResetVersion?: number;
   usdRate?: number;
@@ -382,6 +456,24 @@ export interface TransactionPageResponse {
   pageCount: number;
 }
 
+/** Current expense screen data that must be returned after a transaction mutation. */
+export interface ExpenseTransactionView {
+  year: number;
+  month: number;
+  transactions: TransactionQuery;
+}
+
+/** Server-authoritative expense data returned by an optimized transaction mutation. */
+export interface TransactionMutationSnapshot {
+  summary: ExpenseMonthSummaryResponse;
+  transactions: TransactionPageResponse;
+}
+
+export interface TransactionMutationResult extends TransactionMutationSnapshot {
+  transaction?: Transaction;
+  deletedId?: string;
+}
+
 export interface FundOverviewItem extends Fund {
   revision?: number;
   role?: "owner" | SharedFundRole;
@@ -407,6 +499,7 @@ export interface FundOverviewResponse {
   allTimeActiveMonths: number;
   showGoals: boolean;
   debt: FinancialProfile["debt"];
+  debtSummary?: DebtSummary;
   funds: FundOverviewItem[];
   marketAssets: MarketAssetRequest[];
   market: StoredMarketState;
@@ -508,6 +601,11 @@ export interface FundGoalMutationRequest extends ExpectedRevisionRequest {
 
 export interface TransactionMutationRequest extends ExpectedRevisionRequest {
   transaction: Omit<Transaction, "id"> & { id?: string };
+  expenseView?: ExpenseTransactionView;
+}
+
+export interface TransactionDeleteRequest extends ExpectedRevisionRequest {
+  expenseView?: ExpenseTransactionView;
 }
 
 export interface CategoryCreateRequest extends ExpectedRevisionRequest {
@@ -531,6 +629,19 @@ export interface AccountCreateRequest extends ExpectedRevisionRequest {
 export interface AccountPatchRequest extends ExpectedRevisionRequest {
   name?: string;
   typeId?: string | null;
+}
+
+export interface DebtCreateRequest extends ExpectedRevisionRequest {
+  debt: Omit<Debt, "id" | "payments" | "status">;
+}
+
+export interface DebtPatchRequest extends ExpectedRevisionRequest {
+  debt: Partial<Omit<Debt, "id" | "payments" | "status">>;
+}
+
+export interface DebtPaymentCreateRequest extends ExpectedRevisionRequest {
+  paidAt: string;
+  note?: string;
 }
 
 export interface ReorderMutationRequest extends ExpectedRevisionRequest {
@@ -566,3 +677,4 @@ export interface UserDatabase {
 
 export * from "./normalization.js";
 export * from "./market-state.js";
+export * from "./debt.js";

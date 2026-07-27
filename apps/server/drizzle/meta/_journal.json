@@ -43,6 +43,13 @@
       "when": 1785132908765,
       "tag": "0005_curvy_chimera",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785136500000,
+      "tag": "0006_debts",
+      "breakpoints": true
     }
   ]
 }

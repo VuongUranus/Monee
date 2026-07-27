@@ -3,11 +3,13 @@ import type {
   FinanceStore,
   StatisticsScope,
   Transaction,
+  TransactionQuery,
 } from "@chi-tieu/shared";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { AuthGate } from "./components/AuthGate";
+import { api } from "./lib/api";
 import { createDefaultStore } from "./lib/domain";
 import { useFinanceStore } from "./store/finance-store";
 
@@ -42,6 +44,29 @@ function authenticatedFetch(mutationStatus = 200, prepareLedger?: (ledger: Retur
     if (url.startsWith("/api/transactions?")) {
       return jsonResponse(transactionPage(ledger, new URL(url, "http://localhost").searchParams));
     }
+    if (url === "/api/debts") {
+      return jsonResponse({
+        summary: { liabilities: 0, receivables: 0, netDebt: 0, overdueCount: 0, dueSoonCount: 0 },
+        items: [],
+      });
+    }
+    if (url.startsWith("/api/funds/overview?")) {
+      const params = new URL(url, "http://localhost").searchParams;
+      return jsonResponse({
+        year: Number(params.get("year")),
+        month: Number(params.get("month")),
+        note: "",
+        income: 0,
+        yearActiveMonths: 0,
+        allTimeActiveMonths: 0,
+        showGoals: false,
+        debt: ledger.financialProfile.debt,
+        debtSummary: { liabilities: 0, receivables: 0, netDebt: 0, overdueCount: 0, dueSoonCount: 0 },
+        funds: [],
+        marketAssets: [],
+        market: ledger.market,
+      });
+    }
     if (url.startsWith("/api/statistics?")) {
       return jsonResponse(statisticsResponse(ledger, new URL(url, "http://localhost").searchParams));
     }
@@ -56,9 +81,21 @@ function authenticatedFetch(mutationStatus = 200, prepareLedger?: (ledger: Retur
       }
       let data: unknown = {};
       if (url === "/api/transactions" && init.method === "POST") {
-        const payload = JSON.parse(String(init.body)) as { transaction: ReturnType<typeof createDefaultStore>["expense"]["txns"][number] };
+        const payload = JSON.parse(String(init.body)) as TransactionMutationPayload;
         ledger.expense.txns.push(payload.transaction);
-        data = payload.transaction;
+        data = { transaction: payload.transaction, ...transactionMutationSnapshot(ledger, payload.expenseView) };
+      } else if (/^\/api\/transactions\/[^/]+$/.test(url) && init.method === "PUT") {
+        const payload = JSON.parse(String(init.body)) as TransactionMutationPayload;
+        const id = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+        const transaction = { ...payload.transaction, id };
+        const index = ledger.expense.txns.findIndex((item) => item.id === id);
+        if (index >= 0) ledger.expense.txns[index] = transaction;
+        data = { transaction, ...transactionMutationSnapshot(ledger, payload.expenseView) };
+      } else if (/^\/api\/transactions\/[^/]+$/.test(url) && init.method === "DELETE") {
+        const payload = JSON.parse(String(init.body)) as Pick<TransactionMutationPayload, "expenseView">;
+        const deletedId = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+        ledger.expense.txns = ledger.expense.txns.filter((item) => item.id !== deletedId);
+        data = { deletedId, ...transactionMutationSnapshot(ledger, payload.expenseView) };
       } else if (/^\/api\/years\/\d+$/.test(url)) {
         data = { year: Number(url.slice(url.lastIndexOf("/") + 1)) };
       }
@@ -67,6 +104,35 @@ function authenticatedFetch(mutationStatus = 200, prepareLedger?: (ledger: Retur
     }
     return new Response(null, { status: 204 });
   });
+}
+
+interface TransactionMutationPayload {
+  transaction: Transaction;
+  expenseView: { year: number; month: number; transactions: TransactionQuery };
+}
+
+function transactionMutationSnapshot(
+  ledger: ReturnType<typeof createDefaultStore>,
+  expenseView: TransactionMutationPayload["expenseView"],
+) {
+  return {
+    summary: expenseSummary(ledger, expenseView.year, expenseView.month),
+    transactions: transactionPage(ledger, transactionSearchParams(expenseView.transactions)),
+  };
+}
+
+function transactionSearchParams(query: TransactionQuery): URLSearchParams {
+  const params = new URLSearchParams({
+    from: query.from,
+    to: query.to,
+    page: String(query.page ?? 1),
+    pageSize: String(query.pageSize ?? 10),
+  });
+  if (query.type) params.set("type", query.type);
+  if (query.categoryId) params.set("categoryId", query.categoryId);
+  if (query.accountId) params.set("accountId", query.accountId);
+  if (query.q) params.set("q", query.q);
+  return params;
 }
 
 function bootstrapResponse(ledger: FinanceStore, workspaceRevision: number) {
@@ -214,9 +280,12 @@ beforeEach(() => {
     transactionQuery: null,
     fundOverview: null,
     fundDetails: {},
+    debtOverview: null,
+    debtDetails: {},
     statistics: null,
     expensesState: "idle",
     fundsState: "idle",
+    debtsState: "idle",
     statisticsState: "idle",
     workspaceRevision: 1,
     loaded: false,
@@ -284,6 +353,23 @@ describe("App", () => {
     expect(screen.getAllByText("Tiền mặt").length).toBeGreaterThan(0);
   });
 
+  it("cảnh báo khi danh mục dùng từ 80% ngân sách", async () => {
+    vi.stubGlobal("fetch", authenticatedFetch(200, (ledger) => {
+      ledger.expense.txns.push({ id: "near-budget", date: "2026-07-01", type: "expense", cat: "food", amount: 4_000_000, note: "Gần hạn mức" });
+    }));
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    expect(await screen.findByText("Sắp chạm hạn mức 80%.")).toBeVisible();
+    expect(screen.getAllByText(/Ăn uống/).length).toBeGreaterThan(0);
+  });
+
+  it("mở được trang vay nợ và biểu mẫu tạo khoản", async () => {
+    vi.stubGlobal("fetch", authenticatedFetch());
+    render(<MemoryRouter initialEntries={["/debts"]}><App /></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "Quản lý vay & nợ" })).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "+ Thêm khoản vay/nợ" }));
+    expect(screen.getByRole("dialog", { name: "Thêm khoản vay/nợ" })).toBeVisible();
+  });
+
   it("phân trang lịch sử thu chi theo 10 giao dịch", async () => {
     vi.stubGlobal("fetch", authenticatedFetch(200, (ledger) => {
       for (let index = 1; index <= 11; index += 1) {
@@ -324,6 +410,11 @@ describe("App", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
     await screen.findByRole("heading", { name: "Theo dõi chi tiêu" });
+    await waitFor(() => {
+      const transactionReads = fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/transactions?"));
+      expect(transactionReads).toHaveLength(1);
+    });
+    const requestsBeforeMutation = fetchMock.mock.calls.length;
 
     const amount = screen.getByRole("textbox", { name: "Số tiền" });
     fireEvent.focus(amount);
@@ -335,6 +426,99 @@ describe("App", () => {
     expect(await screen.findByText("Bữa trưa RTL")).toBeVisible();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/transactions", expect.objectContaining({ method: "POST" })));
     expect(screen.getByRole("status")).toHaveTextContent("Đã lưu");
+    const postMutationReads = fetchMock.mock.calls.slice(requestsBeforeMutation)
+      .filter(([url]) => /\/api\/(expenses\/config|expenses\/summary|transactions\?)/.test(String(url)));
+    expect(postMutationReads).toHaveLength(0);
+  });
+
+  it("kích hoạt nút thêm ngay khi nhập tiền và cho phép xóa số tiền", async () => {
+    vi.stubGlobal("fetch", authenticatedFetch());
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "Theo dõi chi tiêu" });
+
+    const amount = screen.getByRole("textbox", { name: "Số tiền" });
+    const addButton = screen.getByRole("button", { name: "+ Thêm khoản" });
+    fireEvent.focus(amount);
+    fireEvent.change(amount, { target: { value: "250000" } });
+    expect(addButton).toBeEnabled();
+
+    fireEvent.change(amount, { target: { value: "" } });
+    expect(amount).toHaveValue("");
+    expect(addButton).toBeDisabled();
+  });
+
+  it("hiển thị giao dịch vừa sửa trước khi máy chủ phản hồi", async () => {
+    vi.stubGlobal("fetch", authenticatedFetch(200, (ledger) => {
+      ledger.expense.txns.push({
+        id: "instant-edit",
+        date: "2026-07-20",
+        type: "expense",
+        cat: "food",
+        amount: 100_000,
+        note: "Giao dịch cũ",
+      });
+    }));
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    await screen.findByText("Giao dịch cũ");
+
+    let resolveUpdate!: (response: Awaited<ReturnType<typeof api.updateTransaction>>) => void;
+    const pendingUpdate = new Promise<Awaited<ReturnType<typeof api.updateTransaction>>>((resolve) => {
+      resolveUpdate = resolve;
+    });
+    const updateSpy = vi.spyOn(api, "updateTransaction").mockReturnValue(pendingUpdate);
+
+    fireEvent.click(screen.getByLabelText("Sửa giao dịch"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Ghi chú đang sửa" }), { target: { value: "Đã sửa ngay" } });
+    fireEvent.click(screen.getByLabelText("Lưu giao dịch"));
+    expect(screen.getByText("Đã sửa ngay")).toBeVisible();
+
+    await waitFor(() => expect(updateSpy).toHaveBeenCalled());
+    resolveUpdate({
+      workspaceRevision: 2,
+      data: {
+        summary: useFinanceStore.getState().expenseSummary!,
+        transactions: useFinanceStore.getState().transactionPage!,
+      },
+    });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Đã lưu"));
+  });
+
+  it("dùng snapshot mutation khi sửa và xóa giao dịch mà không tải lại Chi tiêu", async () => {
+    const fetchMock = authenticatedFetch(200, (ledger) => {
+      ledger.expense.txns.push({
+        id: "snapshot-edit",
+        date: "2026-07-20",
+        type: "expense",
+        cat: "food",
+        amount: 100_000,
+        note: "Giao dịch cũ",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/expenses"]}><App /></MemoryRouter>);
+    await screen.findByText("Giao dịch cũ");
+    await waitFor(() => {
+      const transactionReads = fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/transactions?"));
+      expect(transactionReads).toHaveLength(1);
+    });
+
+    const requestsBeforeUpdate = fetchMock.mock.calls.length;
+    fireEvent.click(screen.getByLabelText("Sửa giao dịch"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Ghi chú đang sửa" }), { target: { value: "Giao dịch đã sửa" } });
+    fireEvent.click(screen.getByLabelText("Lưu giao dịch"));
+    expect(await screen.findByText("Giao dịch đã sửa")).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/transactions/snapshot-edit", expect.objectContaining({ method: "PUT" })));
+    const updateReads = fetchMock.mock.calls.slice(requestsBeforeUpdate)
+      .filter(([url]) => /\/api\/(expenses\/config|expenses\/summary|transactions\?)/.test(String(url)));
+    expect(updateReads).toHaveLength(0);
+
+    const requestsBeforeDelete = fetchMock.mock.calls.length;
+    fireEvent.click(screen.getByLabelText("Xóa giao dịch"));
+    await waitFor(() => expect(screen.queryByText("Giao dịch đã sửa")).not.toBeInTheDocument());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/transactions/snapshot-edit", expect.objectContaining({ method: "DELETE" })));
+    const deleteReads = fetchMock.mock.calls.slice(requestsBeforeDelete)
+      .filter(([url]) => /\/api\/(expenses\/config|expenses\/summary|transactions\?)/.test(String(url)));
+    expect(deleteReads).toHaveLength(0);
   });
 
   it("quay về auth gate khi hàng đợi lưu nhận 401", async () => {

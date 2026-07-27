@@ -285,6 +285,58 @@ export const transactions = pgTable("transactions", {
   check("transactions_amount_positive", sql`${table.amount} > 0`),
 ]);
 
+export const debts = pgTable("debts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull(),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  name: text("name").notNull(),
+  counterparty: text("counterparty").notNull().default(""),
+  principal: money("principal"),
+  annualInterestRate: decimal("annual_interest_rate").notNull().default(0),
+  termMonths: integer("term_months").notNull().default(0),
+  paymentAmount: money("payment_amount"),
+  firstPaymentDate: date("first_payment_date"),
+  paymentCategoryId: uuid("payment_category_id").references(() => financeCategories.id, { onDelete: "restrict" }),
+  paymentAccountId: uuid("payment_account_id").references(() => accounts.id, { onDelete: "set null" }),
+  note: text("note").notNull().default(""),
+  status: text("status").notNull().default("active"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (table) => [
+  uniqueIndex("debts_user_external_unique").on(table.userId, table.externalId),
+  index("debts_user_status_idx").on(table.userId, table.status),
+  check("debts_kind", sql`${table.kind} in ('borrowed', 'lent', 'credit_card', 'installment')`),
+  check("debts_status", sql`${table.status} in ('active', 'settled')`),
+  check("debts_values", sql`
+    ${table.principal} > 0 and ${table.annualInterestRate} >= 0
+    and ${table.termMonths} >= 0 and ${table.paymentAmount} >= 0
+  `),
+]);
+
+export const debtPayments = pgTable("debt_payments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull(),
+  debtId: uuid("debt_id").notNull().references(() => debts.id, { onDelete: "cascade" }),
+  installment: integer("installment").notNull(),
+  paidAt: date("paid_at").notNull(),
+  amount: money("amount"),
+  principalAmount: money("principal_amount"),
+  interestAmount: money("interest_amount"),
+  transactionId: uuid("transaction_id").unique().references(() => transactions.id, { onDelete: "restrict" }),
+  note: text("note").notNull().default(""),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("debt_payments_debt_installment_unique").on(table.debtId, table.installment),
+  uniqueIndex("debt_payments_debt_external_unique").on(table.debtId, table.externalId),
+  index("debt_payments_debt_paid_at_idx").on(table.debtId, table.paidAt),
+  check("debt_payments_values", sql`
+    ${table.installment} > 0 and ${table.amount} > 0
+    and ${table.principalAmount} >= 0 and ${table.interestAmount} >= 0
+    and ${table.amount} = ${table.principalAmount} + ${table.interestAmount}
+  `),
+]);
+
 export const fundContributions = pgTable("fund_contributions", {
   id: uuid("id").primaryKey().defaultRandom(),
   externalId: text("external_id").notNull().unique(),

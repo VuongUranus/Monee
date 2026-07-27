@@ -3,8 +3,13 @@ import type {
   AccountPatchRequest,
   CategoryCreateRequest,
   CategoryPatchRequest,
+  DebtCreateRequest,
+  DebtDetailResponse,
+  DebtOverviewResponse,
+  DebtPatchRequest,
   ExpenseConfigResponse,
   ExpenseMonthSummaryResponse,
+  ExpenseTransactionView,
   FinanceBootstrapResponse,
   FundCreateRequest,
   FundGoalMutationRequest,
@@ -21,6 +26,7 @@ import type {
   StoredFinancePayload,
   TransactionPageResponse,
   TransactionQuery,
+  TransactionMutationResult,
   TransactionMutationRequest,
   UserDatabase,
   UserProfile,
@@ -52,7 +58,16 @@ export type PersonalMutationCommand =
   | { kind: "updateAccount"; id: string; patch: Omit<AccountPatchRequest, "expectedRevision"> }
   | { kind: "deleteAccount"; id: string }
   | { kind: "reorderAccounts"; ids: string[] }
+  | { kind: "createDebt"; input: Omit<DebtCreateRequest, "expectedRevision">["debt"] }
+  | { kind: "updateDebt"; id: string; patch: Omit<DebtPatchRequest, "expectedRevision">["debt"] }
+  | { kind: "deleteDebt"; id: string }
+  | { kind: "recordDebtPayment"; id: string; paidAt: string; note: string }
+  | { kind: "deleteDebtPayment"; id: string; paymentId: string }
   | { kind: "market"; quotes: MarketQuotesResponse };
+
+export type TransactionMutationCommand = Extract<PersonalMutationCommand, {
+  kind: "createTransaction" | "updateTransaction" | "deleteTransaction";
+}>;
 
 export type SharedMutationCommand =
   | {
@@ -78,6 +93,8 @@ export interface UserDataRepository {
   getExpenseConfig(userId: string): Promise<ExpenseConfigResponse>;
   getExpenseSummary(userId: string, year: number, month: number): Promise<ExpenseMonthSummaryResponse>;
   getTransactions(userId: string, query: TransactionQuery): Promise<TransactionPageResponse>;
+  getDebtOverview(userId: string): Promise<DebtOverviewResponse>;
+  getDebtDetail(userId: string, debtId: string): Promise<DebtDetailResponse>;
   getFundOverview(userId: string, year: number, month: number): Promise<FundOverviewResponse>;
   getFundMonthDetail(userId: string, fundId: string, year: number, month: number): Promise<FundMonthDetailResponse>;
   getSharedFundMembers(userId: string, fundId: string): Promise<SharedFundMembersResponse>;
@@ -88,6 +105,12 @@ export interface UserDataRepository {
     month: number,
   ): Promise<SharedFundContributionsResponse>;
   getStatistics(userId: string, scope: StatisticsScope): Promise<StatisticsResponse>;
+  mutateTransaction(
+    userId: string,
+    expectedRevision: number,
+    command: TransactionMutationCommand,
+    expenseView: ExpenseTransactionView,
+  ): Promise<import("@chi-tieu/shared").PersonalMutationResponse<TransactionMutationResult>>;
   mutatePersonalResource<T = unknown>(
     userId: string,
     expectedRevision: number,

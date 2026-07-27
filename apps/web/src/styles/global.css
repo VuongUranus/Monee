@@ -102,6 +102,33 @@ code { font-size: .9em; }
 .page-link:hover { color: var(--accent); }
 .page-link.active { color: var(--accent); border-bottom-color: var(--accent); }
 
+.debts-layout { display: grid; grid-template-columns: minmax(280px, .9fr) minmax(0, 1.4fr); gap: 22px; align-items: start; }
+.debt-list { display: grid; gap: 9px; }
+.debt-item { display: grid; grid-template-columns: max-content 1fr max-content; gap: 4px 10px; width: 100%; padding: 13px; color: var(--ink); text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.debt-item:hover, .debt-item.active { border-color: var(--accent); background: var(--accent-soft); }
+.debt-item > span:not(.debt-kind), .debt-item small { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.debt-item > b { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+.debt-kind { display: inline-flex; width: fit-content; padding: 3px 7px; color: #fff; background: var(--blue); border-radius: 999px; font-size: 10px; font-weight: 750; line-height: 1.2; }
+.debt-kind.lent { background: var(--green); }
+.debt-kind.credit_card { background: var(--purple); }
+.debt-kind.installment { background: var(--gold); }
+.warning { color: #9a6515 !important; }
+.debt-filter-date { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.debt-filter-date .date-picker-trigger { min-height: 34px; }
+.debt-detail-head, .debt-detail-actions { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
+.debt-detail-head h2 { margin: 7px 0 2px; }
+.debt-numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0; }
+.debt-numbers > div { padding: 10px; background: var(--surface); border-radius: 10px; }
+.debt-numbers span, .schedule-row span { display: block; color: var(--muted); font-size: 12px; }
+.debt-numbers b { display: block; margin-top: 3px; }
+.schedule-list { display: grid; gap: 7px; margin: 8px 0 18px; }
+.schedule-row { display: grid; grid-template-columns: minmax(92px, .7fr) 1.2fr auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.schedule-row.paid { background: #eef6f0; border-color: #cfe4d6; }
+.debt-history { margin: 8px 0 0; padding-left: 20px; color: var(--muted); font-size: 13px; }
+.debt-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.debt-form-note { grid-column: 1 / -1; }
+.debt-form textarea { min-height: 74px; resize: vertical; }
+
 .period-main { display: flex; align-items: center; gap: 6px; }
 .period-picker { position: relative; }
 .period-picker-trigger { min-width: 180px; justify-content: space-between; gap: 12px; }
@@ -237,6 +264,7 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 
 .warn-box { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 20px; padding: 11px 14px; color: #7a3527; background: #fdeee9; border: 1px solid #eecfc7; border-left: 4px solid var(--rust); border-radius: 10px; font-size: 13.5px; }
 .warn-box.ok { color: #2f5c44; background: #eef6f0; border-color: #cfe4d6; border-left-color: var(--green); }
+.warn-box.budget-warning { color: #79551b; background: #fff7dc; border-color: #f0d79c; border-left-color: var(--gold); }
 
 .entry-form label, .history-filter label, .statistics-filter label, .form-grid label {
   display: block;
@@ -415,7 +443,8 @@ table .custom-select { max-width: 160px; font-size: 13px; }
   .stat-row, .stat-row-5, .stat-row-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .stat { padding: 13px; }
   .stat .v { font-size: 21px; }
-  .grid, .expense-chart-grid, .statistics-breakdown-grid { grid-template-columns: 1fr; }
+  .grid, .expense-chart-grid, .statistics-breakdown-grid, .debts-layout { grid-template-columns: 1fr; }
+  .debt-form { grid-template-columns: 1fr; }
   .compact-donut { grid-template-columns: 1fr; }
   .section-head { align-items: flex-start; }
   .history-filter { grid-template-columns: 1fr 1fr; }
@@ -430,6 +459,7 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 @media (max-width: 520px) {
   .masthead h1 { font-size: 31px; }
   .stat-row, .stat-row-5, .stat-row-6 { grid-template-columns: 1fr; }
+  .debt-numbers, .schedule-row { grid-template-columns: 1fr; }
   .stat .v { font-size: 24px; }
   .ef-row, .form-grid { grid-template-columns: 1fr; }
   .history-filter { grid-template-columns: 1fr; }

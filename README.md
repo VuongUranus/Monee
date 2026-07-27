@@ -78,7 +78,7 @@ npm run build
 npm start
 ```
 
-Mở `http://127.0.0.1:3000`. `/` chuyển tới `/expenses`; các deep link `/funds`, `/expenses`, `/statistics` refresh trực tiếp.
+Mở `http://127.0.0.1:3000`. `/` chuyển tới `/expenses`; các deep link `/funds`, `/expenses`, `/debts`, `/statistics` refresh trực tiếp.
 
 Fastify kiểm tra `SELECT 1` khi startup và đóng pool theo lifecycle. Mọi mutation cá nhân dùng `workspaceRevision`; quỹ chung dùng revision riêng và trả `409` khi client stale.
 
@@ -88,6 +88,7 @@ Các read model chính:
 - `GET /api/expenses/config`, `GET /api/expenses/summary`: cấu hình và tổng hợp chi tiêu.
 - `GET /api/transactions`: lọc, tìm kiếm và phân trang server-side.
 - `GET /api/funds/overview`, `GET /api/funds/:id/months/:year/:month`: tổng quan và chi tiết tải lười.
+- `GET /api/debts`, `GET /api/debts/:id`: tổng hợp khoản vay/nợ, lịch trả và lịch sử thanh toán.
 - `GET /api/statistics`: thống kê đã `GROUP BY` ở PostgreSQL.
 - `GET /api/backup/export`: endpoint online duy nhất dựng đầy đủ dữ liệu private.
 

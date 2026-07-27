@@ -51,6 +51,7 @@ Role quỹ chung: `viewer` chỉ đọc; `editor` sửa metadata, month/detail, 
 ```ts
 type FundCategory = "saving" | "stock" | "gold" | "crypto";
 type TransactionType = "income" | "expense";
+type DebtKind = "borrowed" | "lent" | "credit_card" | "installment";
 type SharedFundRole = "viewer" | "editor";
 
 interface Transaction {
@@ -127,7 +128,14 @@ GET /api/transactions?from=2026-07-01&to=2026-07-31&type=expense&q=c%C3%A0%20ph%
 
 | Method, path | Chức năng | Request | Response |
 | --- | --- | --- | --- |
-| `GET /api/funds/overview?year=2026&month=7` | Tải card quỹ private/quỹ chung, 12 tháng của năm và số liệu tổng hợp. Không tải lots. | `year`, `month` bắt buộc. | `FundOverviewResponse`: `year`, `month`, `note`, `income`, `yearActiveMonths`, `allTimeActiveMonths`, `showGoals`, `debt`, `marketAssets`, `market`, `funds`. |
+| `GET /api/funds/overview?year=2026&month=7` | Tải card quỹ private/quỹ chung, 12 tháng của năm và số liệu tổng hợp. Không tải lots. | `year`, `month` bắt buộc. | `FundOverviewResponse`: `year`, `month`, `note`, `income`, `yearActiveMonths`, `allTimeActiveMonths`, `showGoals`, `debt`, `debtSummary`, `marketAssets`, `market`, `funds`. |
+
+### Vay & nợ
+
+| Method, path | Chức năng | Response |
+| --- | --- | --- |
+| `GET /api/debts` | Tổng hợp nợ phải trả/phải thu và danh sách khoản vay. | `{ summary, items }`; mỗi item có dư nợ, lãi dự kiến, kỳ kế tiếp và trạng thái đến hạn. |
+| `GET /api/debts/:id` | Chi tiết một khoản. | Item đầy đủ, `schedule` hàng tháng và `payments`. |
 | `GET /api/funds/:id/months/:year/:month` | Tải lười lots/detail khi mở modal quỹ. Kiểm tra quyền quỹ chung. | Path `id`, `year`, `month`. | `{ fundId, year, month, amount, detail }` |
 | `GET /api/shared-funds/:id/members` | Tải danh sách thành viên khi mở modal. | Path `id`. | `{ fundId, revision, members: [{ user: { sub, name, email }, role }] }` |
 | `GET /api/shared-funds/:id/contributions?year=2026&month=7` | Tải contribution một kỳ của quỹ chung. | Path `id`; query `year`, `month`. | `{ fundId, revision, period: "2026-07", contributors, items }`; `items` là `{ id, memberId, amount, note, createdAt }[]`. |
@@ -178,6 +186,11 @@ Các endpoint trong bảng này đều cần `expectedRevision` trong JSON body 
 | `PUT /api/funds/order` | Lưu thứ tự quỹ. | `{ ids: string[] }` phải là thứ tự hợp lệ. | `{ ids }` |
 | `PUT /api/funds/:id/months/:year/:month` | Upsert giá trị/thông tin tài sản một tháng. | `{ amount, detail? }`; `detail` là `FundDetail` hoặc `null`. | `{ fundId, year, month, amount, detail }` |
 | `PUT /api/funds/:id/goals` | Đặt mục tiêu năm hoặc toàn thời gian. | `{ year: number \| null, amount }`; `null` là all-time. | `{ fundId, year, amount }` |
+| `POST /api/debts` | Tạo khoản vay/nợ. | `{ debt: { kind, name, counterparty, principal, annualInterestRate, termMonths, paymentAmount, firstPaymentDate, paymentCategoryId, paymentAccountId?, note } }` | `{ id }` |
+| `PATCH /api/debts/:id` | Sửa khoản. | `{ debt: { ...partial } }`; lịch trả bị khoá sau khi có payment. | `{ id }` |
+| `DELETE /api/debts/:id` | Xóa khoản và các giao dịch tự động liên quan. | — | `{ deletedId }` |
+| `POST /api/debts/:id/payments` | Ghi nhận kỳ kế tiếp và tạo giao dịch thu/chi. | `{ paidAt, note? }` | `{ debtId, paymentId, transactionId }` |
+| `DELETE /api/debts/:id/payments/:paymentId` | Hoàn tác kỳ gần nhất và xóa giao dịch tự động. | — | `{ deletedId }` |
 
 Ví dụ cập nhật tháng quỹ:
 
@@ -213,6 +226,25 @@ Các endpoint sau cũng dùng response/revision cá nhân chung.
 | `PATCH /api/accounts/:id` | Sửa tài khoản. | `{ name?, typeId?: string \| null }` | `Account` đã sửa. |
 | `DELETE /api/accounts/:id` | Xoá/soft-delete account; giao dịch cũ vẫn hợp lệ. | — | `{ deletedId }` |
 | `PUT /api/accounts/order` | Lưu thứ tự account. | `{ ids: string[] }` | `{ ids }` |
+
+Khi web app gửi thêm `expenseView`, ba mutation giao dịch trả snapshot mới trong chính response ghi, để không cần gọi lại các API đọc:
+
+```json
+{
+  "expenseView": {
+    "year": 2026,
+    "month": 7,
+    "transactions": {
+      "from": "2026-07-01",
+      "to": "2026-07-31",
+      "page": 1,
+      "pageSize": 10
+    }
+  }
+}
+```
+
+`expenseView.transactions` dùng cùng quy tắc lọc/phân trang với `GET /api/transactions`. Khi có field này, `data` là `{ transaction? | deletedId?, summary, transactions }`: `summary` là `ExpenseMonthSummaryResponse` của kỳ yêu cầu và `transactions` là `TransactionPageResponse` của đúng bộ lọc. Backend dựng snapshot trong cùng transaction với mutation. Request cũ không có `expenseView` vẫn nhận `Transaction` hoặc `{ deletedId }` như contract trước.
 
 ## Quỹ chung
 

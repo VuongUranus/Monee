@@ -18,7 +18,7 @@ const webRoutesPlugin: FastifyPluginAsync<WebRoutesOptions> = async (app, option
       spa: true,
     });
     await app.vite.ready();
-    for (const route of ["/funds", "/expenses", "/statistics"]) {
+    for (const route of ["/funds", "/expenses", "/statistics", "/debts"]) {
       app.get(route, (_request, reply) => reply.html());
     }
   } else {
@@ -31,7 +31,7 @@ const webRoutesPlugin: FastifyPluginAsync<WebRoutesOptions> = async (app, option
       maxAge: "1y",
       immutable: true,
     });
-    for (const route of ["/funds", "/expenses", "/statistics"]) {
+    for (const route of ["/funds", "/expenses", "/statistics", "/debts"]) {
       app.get(route, (_request, reply) => {
         reply.header("Cache-Control", "no-store");
         return reply.sendFile("index.html", { cacheControl: false });

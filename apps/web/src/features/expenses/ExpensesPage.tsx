@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { Account, FinanceCategory, Transaction, TransactionType } from "@chi-tieu/shared";
+import { useEffect, useMemo, useState } from "react";
+import type { Account, FinanceCategory, Transaction, TransactionQuery, TransactionType } from "@chi-tieu/shared";
 import { AccountExpenseChart } from "@/components/AccountExpenseChart";
 import { DonutChart } from "@/components/Charts";
 import { DateField } from "@/components/DateField";
@@ -31,6 +31,18 @@ interface HistoryFilters {
 const emptyFilters: HistoryFilters = { from: "", to: "", type: "", category: "", account: "", search: "" };
 const HISTORY_PAGE_SIZE = 10;
 
+function sameTransactionQuery(left: TransactionQuery | null, right: TransactionQuery): boolean {
+  if (!left) return false;
+  return left.from === right.from
+    && left.to === right.to
+    && left.type === right.type
+    && left.categoryId === right.categoryId
+    && left.accountId === right.accountId
+    && left.q === right.q
+    && (left.page ?? 1) === (right.page ?? 1)
+    && (left.pageSize ?? 10) === (right.pageSize ?? 10);
+}
+
 export function ExpensesPage() {
   const ledger = useFinanceStore((state) => state.ledger);
   const year = useFinanceStore((state) => state.selectedYear);
@@ -38,9 +50,11 @@ export function ExpensesPage() {
   const periodReady = useFinanceStore((state) => state.periodReady);
   const expenseSummary = useFinanceStore((state) => state.expenseSummary);
   const transactionPage = useFinanceStore((state) => state.transactionPage);
+  const transactionQuery = useFinanceStore((state) => state.transactionQuery);
   const loadExpenses = useFinanceStore((state) => state.loadExpenses);
   const loadTransactions = useFinanceStore((state) => state.loadTransactions);
-  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const createTransaction = useFinanceStore((state) => state.createTransaction);
+  const deleteTransaction = useFinanceStore((state) => state.deleteTransaction);
   const [managing, setManaging] = useState(false);
   const [managingAccounts, setManagingAccounts] = useState(false);
   const [type, setType] = useState<TransactionType>("expense");
@@ -74,19 +88,22 @@ export function ExpensesPage() {
     if (periodReady) void loadExpenses();
   }, [loadExpenses, month, periodReady, year]);
 
+  const historyQuery = useMemo(() => ({
+    from: filters.from || minDate,
+    to: filters.to || maxDate,
+    ...(filters.type ? { type: filters.type } : {}),
+    ...(filters.category ? { categoryId: filters.category } : {}),
+    ...(filters.account ? { accountId: filters.account } : {}),
+    ...(filters.search.trim() ? { q: filters.search.trim() } : {}),
+    page: historyPage,
+    pageSize: HISTORY_PAGE_SIZE,
+  }), [filters.account, filters.category, filters.from, filters.search, filters.to, filters.type, historyPage, maxDate, minDate]);
+
   useEffect(() => {
     if (!expenseSummary || expenseSummary.year !== year || expenseSummary.month !== month + 1) return;
+    if (sameTransactionQuery(transactionQuery, historyQuery)) return;
     const timer = window.setTimeout(() => {
-      void loadTransactions({
-        from: filters.from || minDate,
-        to: filters.to || maxDate,
-        ...(filters.type ? { type: filters.type } : {}),
-        ...(filters.category ? { categoryId: filters.category } : {}),
-        ...(filters.account ? { accountId: filters.account } : {}),
-        ...(filters.search.trim() ? { q: filters.search.trim() } : {}),
-        page: historyPage,
-        pageSize: HISTORY_PAGE_SIZE,
-      });
+      void loadTransactions(historyQuery);
     }, filters.search ? 250 : 0);
     return () => window.clearTimeout(timer);
   }, [
@@ -98,10 +115,12 @@ export function ExpensesPage() {
     filters.to,
     filters.type,
     historyPage,
+    historyQuery,
     loadTransactions,
     maxDate,
     minDate,
     month,
+    transactionQuery,
     year,
   ]);
 
@@ -121,7 +140,15 @@ export function ExpensesPage() {
   const byExpenseCategory = expenseSummary?.byExpenseCategory ?? {};
   const accountExpenses = expenseSummary?.accountExpenses ?? [];
   const byIncomeCategory = expenseSummary?.byIncomeCategory ?? {};
-  const overBudget = ledger.expense.cats.filter((item) => (item.budget ?? 0) > 0 && (byExpenseCategory[item.id] ?? 0) > (item.budget ?? 0));
+  const overBudget = ledger.expense.cats.filter((item) => (item.budget ?? 0) > 0 && (byExpenseCategory[item.id] ?? 0) >= (item.budget ?? 0));
+  const nearingBudget = ledger.expense.cats.filter((item) => {
+    const budget = item.budget ?? 0;
+    const spent = byExpenseCategory[item.id] ?? 0;
+    return budget > 0 && spent / budget >= 0.8 && spent < budget;
+  });
+  const totalBudgetUsage = totalBudget > 0 ? spent / totalBudget : 0;
+  const totalOverBudget = totalBudget > 0 && totalBudgetUsage >= 1;
+  const totalNearBudget = totalBudget > 0 && totalBudgetUsage >= 0.8 && totalBudgetUsage < 1;
 
   const historyTotal = transactionPage?.total ?? 0;
   const historyPageCount = transactionPage?.pageCount ?? 1;
@@ -141,9 +168,7 @@ export function ExpensesPage() {
       amount,
       note: note.trim(),
     };
-    mutateLedger((draft) => {
-      draft.expense.txns.push(transaction);
-    }, (expectedRevision) => api.createTransaction(transaction, expectedRevision));
+    createTransaction(transaction);
     setAmount(0);
     setNote("");
   };
@@ -166,8 +191,9 @@ export function ExpensesPage() {
       </div>
 
       {balance < 0 ? <div className="warn-box"><span>⚠</span><div>Sau khi chi và trích quỹ, bạn <b>âm {fmt(-balance)}</b> trong {MONTHS_FULL[month]}.</div></div> : null}
-      {overBudget.length ? <div className="warn-box"><span>⚠</span><div>Vượt hạn mức: {overBudget.map((item) => <span key={item.id}><b>{item.name}</b> ({fmt(byExpenseCategory[item.id] ?? 0)}/{fmt(item.budget ?? 0)}) </span>)}</div></div> : null}
-      {balance >= 0 && !overBudget.length && (transactions.length > 0 || funds > 0) ? <div className="warn-box ok"><span>✓</span><div>Trong tầm kiểm soát, vẫn còn dư <b>{fmt(balance)}</b>.</div></div> : null}
+      {overBudget.length || totalOverBudget ? <div className="warn-box"><span>⚠</span><div><b>Đã chạm hoặc vượt hạn mức.</b>{totalOverBudget ? <span> Tổng ngân sách: {fmt(spent)}/{fmt(totalBudget)}. </span> : null}{overBudget.map((item) => <span key={item.id}> <b>{item.name}</b> ({fmt(byExpenseCategory[item.id] ?? 0)}/{fmt(item.budget ?? 0)})</span>)}</div></div> : null}
+      {nearingBudget.length || totalNearBudget ? <div className="warn-box budget-warning"><span>⚠</span><div><b>Sắp chạm hạn mức 80%.</b>{totalNearBudget ? <span> Tổng ngân sách đang dùng {Math.round(totalBudgetUsage * 100)}%. </span> : null}{nearingBudget.map((item) => <span key={item.id}> <b>{item.name}</b> {Math.round((byExpenseCategory[item.id] ?? 0) / (item.budget ?? 1) * 100)}%</span>)}</div></div> : null}
+      {balance >= 0 && !overBudget.length && !nearingBudget.length && !totalOverBudget && !totalNearBudget && (transactions.length > 0 || funds > 0) ? <div className="warn-box ok"><span>✓</span><div>Trong tầm kiểm soát, vẫn còn dư <b>{fmt(balance)}</b>.</div></div> : null}
 
       <article className="card">
         <h2>Thêm khoản thu chi</h2>
@@ -202,7 +228,7 @@ export function ExpensesPage() {
                 />
               </label>
             </div>
-            <label>Số tiền<MoneyInput value={amount} allowZero={false} onCommit={setAmount} placeholder="vd: 150000" /></label>
+            <label>Số tiền<MoneyInput value={amount} allowZero={false} onCommit={setAmount} onValueChange={setAmount} placeholder="vd: 150000" /></label>
             <label>Ghi chú<input value={note} placeholder="vd: ăn trưa, đổ xăng…" onChange={(event) => setNote(event.target.value)} /></label>
             <button className="btn primary full-width" type="button" disabled={!amount || !date || !selectedCategory} onClick={addTransaction}>+ Thêm khoản</button>
         </div>
@@ -237,15 +263,18 @@ export function ExpensesPage() {
               {ledger.expense.cats.map((item) => {
                 const value = byExpenseCategory[item.id] ?? 0;
                 const budget = item.budget ?? 0;
-                const usage = budget ? Math.min(100, value / budget * 100) : value ? 100 : 0;
+                const rawUsage = budget ? value / budget * 100 : 0;
+                const usage = budget ? Math.min(100, rawUsage) : value ? 100 : 0;
+                const danger = budget > 0 && rawUsage >= 100;
+                const warning = budget > 0 && rawUsage >= 80 && rawUsage < 100;
                 return (
                   <tr key={item.id}>
                     <td><span className="fund-tag" style={{ background: item.color }} />{item.name}</td>
                     <td>{fmt(value)}</td><td>{value ? fmt(value / daysInMonth) : "—"}</td>
                     <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
                     <td>{budget ? fmt(budget) : "—"}</td>
-                    <td className={budget && value > budget ? "negative" : ""}>{budget ? fmt(budget - value) : "—"}</td>
-                    <td>{budget ? <>{Math.round(value / budget * 100)}%<div className="bar"><span style={{ width: `${usage}%`, background: value > budget ? "var(--rust)" : item.color }} /></div></> : <span className="goal-cell">chưa đặt</span>}</td>
+                    <td className={danger ? "negative" : warning ? "warning" : ""}>{budget ? fmt(budget - value) : "—"}</td>
+                    <td>{budget ? <>{Math.round(rawUsage)}%<div className="bar"><span style={{ width: `${usage}%`, background: danger ? "var(--rust)" : warning ? "var(--gold)" : item.color }} /></div></> : <span className="goal-cell">chưa đặt</span>}</td>
                   </tr>
                 );
               })}
@@ -306,7 +335,7 @@ export function ExpensesPage() {
                     <td>{transaction.accountId ? accountForTransaction(ledger, transaction)?.name ?? "(đã xóa)" : "Chưa xác định"}</td>
                     <td>{transaction.note}</td>
                     <td className={`amt-${transaction.type}`}>{transaction.type === "income" ? "+" : "−"}{fmt(transaction.amount)}</td>
-                    <td><button className="tx-edit" type="button" aria-label="Sửa giao dịch" onClick={() => setEditingId(transaction.id)}>✎</button><button className="tx-del" type="button" aria-label="Xóa giao dịch" onClick={() => mutateLedger((draft) => { draft.expense.txns = draft.expense.txns.filter((item) => item.id !== transaction.id); }, (expectedRevision) => api.deleteTransaction(transaction.id, expectedRevision))}>×</button></td>
+                    <td><button className="tx-edit" type="button" aria-label="Sửa giao dịch" onClick={() => setEditingId(transaction.id)}>✎</button><button className="tx-del" type="button" aria-label="Xóa giao dịch" onClick={() => deleteTransaction(transaction.id)}>×</button></td>
                   </tr>
                 ))}
             </tbody>
@@ -351,7 +380,7 @@ function CategoryDonut({ categories, amounts, empty, compact = false }: { catego
 
 function EditTransactionRow({ transaction, onDone }: { transaction: Transaction; onDone(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
-  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const updateTransaction = useFinanceStore((state) => state.updateTransaction);
   const [draft, setDraft] = useState(structuredClone(transaction));
   const categories = categoriesForType(ledger, draft.type);
   const accountOptions = accountSelectOptions(ledger.expense.accounts);
@@ -395,13 +424,10 @@ function EditTransactionRow({ transaction, onDone }: { transaction: Transaction;
         />
       </td>
       <td><input aria-label="Ghi chú đang sửa" value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></td>
-      <td><MoneyInput value={draft.amount} allowZero={false} onCommit={(amount) => setDraft({ ...draft, amount })} /></td>
+      <td><MoneyInput value={draft.amount} allowZero={false} onCommit={(amount) => setDraft({ ...draft, amount })} onValueChange={(amount) => setDraft((current) => ({ ...current, amount }))} /></td>
       <td><button className="tx-save" type="button" aria-label="Lưu giao dịch" onClick={() => {
         if (!(draft.amount > 0)) return;
-        mutateLedger((store) => {
-          const index = store.expense.txns.findIndex((item) => item.id === transaction.id);
-          if (index >= 0) store.expense.txns[index] = draft;
-        }, (expectedRevision) => api.updateTransaction(transaction.id, draft, expectedRevision));
+        updateTransaction(draft);
         onDone();
       }}>✓</button><button className="tx-cancel" type="button" aria-label="Hủy chỉnh sửa" onClick={onDone}>×</button></td>
     </tr>
@@ -411,7 +437,7 @@ function EditTransactionRow({ transaction, onDone }: { transaction: Transaction;
 function CategoryManager({ onClose }: { onClose(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
-  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const mutateExpenseConfig = useFinanceStore((state) => state.mutateExpenseConfig);
   const [tab, setTab] = useState<TransactionType>("expense");
   const [name, setName] = useState("");
   const [color, setColor] = useState(PALETTE[0]!);
@@ -419,7 +445,7 @@ function CategoryManager({ onClose }: { onClose(): void }) {
 
   const add = (): void => {
     if (!name.trim()) return;
-    mutateLedger((draft) => {
+    mutateExpenseConfig((draft) => {
       const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
       let id = slugId(name);
       let suffix = 2;
@@ -434,7 +460,7 @@ function CategoryManager({ onClose }: { onClose(): void }) {
     if (next < 0 || next >= categories.length) return;
     const ids = categories.map((item) => item.id);
     [ids[index], ids[next]] = [ids[next]!, ids[index]!];
-    mutateLedger((draft) => {
+    mutateExpenseConfig((draft) => {
       const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
       const [item] = target.splice(index, 1);
       if (item) target.splice(next, 0, item);
@@ -453,7 +479,7 @@ function CategoryManager({ onClose }: { onClose(): void }) {
             <div className="reorder-actions"><button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" disabled={index === categories.length - 1} onClick={() => move(index, 1)}>↓</button></div>
             <input type="color" value={item.color} aria-label={`Màu ${item.name}`} onChange={(event) => {
               const nextColor = event.target.value;
-              mutateLedger((draft) => {
+              mutateExpenseConfig((draft) => {
                 const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
                 target[index]!.color = nextColor;
               }, (expectedRevision) => api.updateCategory(tab, item.id, { color: nextColor }, expectedRevision));
@@ -463,13 +489,13 @@ function CategoryManager({ onClose }: { onClose(): void }) {
               target[index]!.name = event.target.value;
             })} onBlur={(event) => {
               const nextName = event.currentTarget.value.trim();
-              if (nextName) mutateLedger(() => undefined, (expectedRevision) => api.updateCategory(tab, item.id, { name: nextName }, expectedRevision));
+              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateCategory(tab, item.id, { name: nextName }, expectedRevision));
             }} />
-            {tab === "expense" ? <MoneyInput value={item.budget ?? 0} onCommit={(budget) => mutateLedger((draft) => {
+            {tab === "expense" ? <MoneyInput value={item.budget ?? 0} onCommit={(budget) => mutateExpenseConfig((draft) => {
               draft.expense.cats[index]!.budget = budget;
               draft.financialProfile.monthlyBudgets[item.id] = budget;
             }, (expectedRevision) => api.updateCategory(tab, item.id, { budget }, expectedRevision))} /> : <span />}
-            <button className="btn sm danger" type="button" disabled={categories.length <= 1} onClick={() => mutateLedger((draft) => {
+            <button className="btn sm danger" type="button" disabled={categories.length <= 1} onClick={() => mutateExpenseConfig((draft) => {
               const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
               target.splice(index, 1);
             }, (expectedRevision) => api.deleteCategory(tab, item.id, expectedRevision))}>Xóa</button>
@@ -488,7 +514,7 @@ function CategoryManager({ onClose }: { onClose(): void }) {
 function AccountManager({ onClose }: { onClose(): void }) {
   const ledger = useFinanceStore((state) => state.ledger);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
-  const mutateLedger = useFinanceStore((state) => state.mutateLedger);
+  const mutateExpenseConfig = useFinanceStore((state) => state.mutateExpenseConfig);
   const [tab, setTab] = useState<"accounts" | "types">("accounts");
   const [name, setName] = useState("");
   const [typeId, setTypeId] = useState(ledger.expense.accountTypes[0]?.id ?? "");
@@ -506,7 +532,7 @@ function AccountManager({ onClose }: { onClose(): void }) {
 
   const add = (): void => {
     if (!name.trim()) return;
-    mutateLedger((draft) => {
+    mutateExpenseConfig((draft) => {
       if (isAccounts) {
         draft.expense.accounts.push({
           id: uniqueId(name, draft.expense.accounts.map((item) => item.id)),
@@ -531,7 +557,7 @@ function AccountManager({ onClose }: { onClose(): void }) {
     if (next < 0 || next >= target.length) return;
     const ids = target.map((item) => item.id);
     [ids[index], ids[next]] = [ids[next]!, ids[index]!];
-    mutateLedger((draft) => {
+    mutateExpenseConfig((draft) => {
       const collection = isAccounts ? draft.expense.accounts : draft.expense.accountTypes;
       const [item] = collection.splice(index, 1);
       if (item) collection.splice(next, 0, item);
@@ -555,12 +581,12 @@ function AccountManager({ onClose }: { onClose(): void }) {
               draft.expense.accounts[index]!.name = event.target.value;
             })} onBlur={(event) => {
               const nextName = event.currentTarget.value.trim();
-              if (nextName) mutateLedger(() => undefined, (expectedRevision) => api.updateAccount(account.id, { name: nextName }, expectedRevision));
+              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateAccount(account.id, { name: nextName }, expectedRevision));
             }} />
             <Select
               value={account.typeId ?? ""}
               options={typeOptions}
-              onValueChange={(nextTypeId) => mutateLedger((draft) => {
+              onValueChange={(nextTypeId) => mutateExpenseConfig((draft) => {
                 const target = draft.expense.accounts[index]!;
                 if (nextTypeId) target.typeId = nextTypeId;
                 else delete target.typeId;
@@ -568,7 +594,7 @@ function AccountManager({ onClose }: { onClose(): void }) {
               ariaLabel={`Loại ${account.name}`}
               compact
             />
-            <button className="btn sm danger" type="button" onClick={() => mutateLedger((draft) => {
+            <button className="btn sm danger" type="button" onClick={() => mutateExpenseConfig((draft) => {
               draft.expense.accounts.splice(index, 1);
             }, (expectedRevision) => api.deleteAccount(account.id, expectedRevision))}>Xóa</button>
           </div>
@@ -580,10 +606,10 @@ function AccountManager({ onClose }: { onClose(): void }) {
               draft.expense.accountTypes[index]!.name = event.target.value;
             })} onBlur={(event) => {
               const nextName = event.currentTarget.value.trim();
-              if (nextName) mutateLedger(() => undefined, (expectedRevision) => api.updateAccountType(type.id, nextName, expectedRevision));
+              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateAccountType(type.id, nextName, expectedRevision));
             }} />
             <span />
-            <button className="btn sm danger" type="button" onClick={() => mutateLedger((draft) => {
+            <button className="btn sm danger" type="button" onClick={() => mutateExpenseConfig((draft) => {
               draft.expense.accountTypes.splice(index, 1);
               for (const account of draft.expense.accounts) if (account.typeId === type.id) delete account.typeId;
             }, (expectedRevision) => api.deleteAccountType(type.id, expectedRevision))}>Xóa</button>

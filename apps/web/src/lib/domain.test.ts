@@ -51,6 +51,18 @@ describe("nghiệp vụ sổ tài chính", () => {
     expect(normalized.store.expense.txns[0]?.accountId).toBeUndefined();
   });
 
+  it("chuyển dư nợ cũ sang khoản vay cần hoàn thiện lịch", () => {
+    const normalized = normalizeStore({
+      funds: [], years: { "2026": { income: new Array(12).fill(0), funds: {} } },
+      expense: { cats: [], incomeCats: [], txns: [] },
+      financialProfile: { debt: { balance: 5_000_000, monthlyPayment: 500_000 } },
+    });
+    expect(normalized.store.debts).toContainEqual(expect.objectContaining({
+      id: "legacy-debt", name: "Dư nợ cũ", principal: 5_000_000, paymentAmount: 500_000, termMonths: 0,
+    }));
+    expect(normalized.store.financialProfile.debt.balance).toBe(0);
+  });
+
   it("tra cứu tài khoản và loại trả về rỗng khi bản ghi đã bị xóa", () => {
     const store = createDefaultStore();
     const cash = store.expense.accounts[0]!;

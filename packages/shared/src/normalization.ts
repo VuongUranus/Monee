@@ -1,6 +1,7 @@
 import type {
   Account,
   AccountType,
+  Debt,
   FinanceCategory,
   FinanceStore,
   FinancialProfile,
@@ -112,12 +113,76 @@ export function createDefaultStore(): FinanceStore {
     market: emptyMarket(),
     onboarding: { status: "completed", version: 1 },
     financialProfile: defaultFinancialProfile(),
+    debts: [],
     incomeMigrationVersion: 1,
     futureIncomeResetVersion: 1,
   };
   for (const year of [2025, 2026]) store.years[String(year)] = blankYearWith(store.funds);
   ensureFinancialProfile(store);
   return store;
+}
+
+function ensureDebts(store: FinanceStore): boolean {
+  let changed = false;
+  if (!Array.isArray(store.debts)) {
+    store.debts = [];
+    changed = true;
+  }
+  for (const [index, debt] of (store.debts as Debt[]).entries()) {
+    if (!debt.id) {
+      debt.id = `debt-${index + 1}`;
+      changed = true;
+    }
+    if (!["borrowed", "lent", "credit_card", "installment"].includes(debt.kind)) {
+      debt.kind = "borrowed";
+      changed = true;
+    }
+    debt.name = String(debt.name || "Khoản vay");
+    debt.counterparty = String(debt.counterparty || "");
+    debt.principal = cleanMoney(debt.principal);
+    debt.annualInterestRate = Math.max(0, Number(debt.annualInterestRate) || 0);
+    debt.termMonths = Math.max(0, Math.floor(Number(debt.termMonths) || 0));
+    debt.paymentAmount = cleanMoney(debt.paymentAmount);
+    if (debt.firstPaymentDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(debt.firstPaymentDate)) {
+      delete debt.firstPaymentDate;
+      changed = true;
+    }
+    debt.note = String(debt.note || "");
+    debt.status = debt.status === "settled" ? "settled" : "active";
+    if (!Array.isArray(debt.payments)) {
+      debt.payments = [];
+      changed = true;
+    }
+    debt.payments = debt.payments.map((payment: any, index) => ({
+      id: String(payment?.id || `${debt.id}-payment-${index + 1}`),
+      installment: Math.max(1, Math.floor(Number(payment?.installment) || index + 1)),
+      paidAt: /^\d{4}-\d{2}-\d{2}$/.test(payment?.paidAt) ? payment.paidAt : "",
+      amount: cleanMoney(payment?.amount),
+      principalAmount: cleanMoney(payment?.principalAmount),
+      interestAmount: cleanMoney(payment?.interestAmount),
+      ...(typeof payment?.transactionId === "string" && payment.transactionId ? { transactionId: payment.transactionId } : {}),
+      note: String(payment?.note || ""),
+    })).filter((payment) => payment.paidAt && payment.amount > 0);
+  }
+  const legacy = store.financialProfile.debt;
+  if (store.debts.length === 0 && legacy.balance > 0) {
+    store.debts.push({
+      id: "legacy-debt",
+      kind: "borrowed",
+      name: "Dư nợ cũ",
+      counterparty: "",
+      principal: legacy.balance,
+      annualInterestRate: 0,
+      termMonths: 0,
+      paymentAmount: legacy.monthlyPayment,
+      note: "Cần bổ sung kỳ hạn và ngày thanh toán.",
+      status: "active",
+      payments: [],
+    });
+    store.financialProfile.debt = { balance: 0, monthlyPayment: 0 };
+    changed = true;
+  }
+  return changed;
 }
 
 function ensureYearData(value: any, funds: Fund[]): YearData {
@@ -334,6 +399,7 @@ export function normalizeStore(payload: StoredFinancePayload): { store: FinanceS
   store.market = legacyMarket(raw);
   const expenseMigration = ensureExpense(store);
   ensureFinancialProfile(store);
+  const debtMigration = ensureDebts(store);
   const assetMigration = migrateAssetDetails(store);
   const incomeMigration = migrateFixedIncome(store);
   const futureIncomeMigration = resetFutureLegacySalary(store);
@@ -347,12 +413,13 @@ export function normalizeStore(payload: StoredFinancePayload): { store: FinanceS
     market: structuredClone(store.market),
     onboarding: structuredClone(store.onboarding),
     financialProfile: structuredClone(store.financialProfile),
+    debts: structuredClone(store.debts),
     ...(store.incomeMigrationVersion !== undefined ? { incomeMigrationVersion: store.incomeMigrationVersion } : {}),
     ...(store.futureIncomeResetVersion !== undefined ? { futureIncomeResetVersion: store.futureIncomeResetVersion } : {}),
     ...(store.usdRate !== undefined ? { usdRate: store.usdRate } : {}),
   };
   return {
     store: canonical,
-    needsSave: expenseMigration || assetMigration || incomeMigration || futureIncomeMigration || raw.market !== store.market,
+    needsSave: expenseMigration || debtMigration || assetMigration || incomeMigration || futureIncomeMigration || raw.market !== store.market,
   };
 }

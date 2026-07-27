@@ -1,8 +1,13 @@
 import crypto from "node:crypto";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import {
+  debtRemainingBalance,
+  debtSchedule,
+} from "@chi-tieu/shared";
 import type {
   Account,
   AccountType,
+  Debt,
   DeleteMutationResult,
   FinanceCategory,
   FinancePreferences,
@@ -40,6 +45,73 @@ async function privateFund(tx: Executor, userId: string, externalId: string) {
   ));
   if (!fund) throw new SharedFundError("fund_not_found", 404, "Không tìm thấy quỹ.");
   return fund;
+}
+
+async function privateDebt(tx: Executor, userId: string, externalId: string) {
+  const [debt] = await tx.select().from(schema.debts).where(and(
+    eq(schema.debts.userId, userId),
+    eq(schema.debts.externalId, externalId),
+  ));
+  if (!debt) throw new SharedFundError("debt_not_found", 404, "Không tìm thấy khoản vay/nợ.");
+  return debt;
+}
+
+async function debtPaymentTargets(
+  tx: Executor,
+  userId: string,
+  input: { kind: Debt["kind"]; paymentCategoryId?: string; paymentAccountId?: string },
+): Promise<{ categoryId: string | null; accountId: string | null }> {
+  const expectedType = input.kind === "lent" ? "income" : "expense";
+  let categoryId: string | null = null;
+  if (input.paymentCategoryId) {
+    const [category] = await tx.select().from(schema.financeCategories).where(and(
+      eq(schema.financeCategories.userId, userId),
+      eq(schema.financeCategories.externalId, input.paymentCategoryId),
+      eq(schema.financeCategories.type, expectedType),
+      sql`${schema.financeCategories.deletedAt} is null`,
+    ));
+    if (!category) throw new SharedFundError("payment_category_not_found", 400, "Danh mục giao dịch tự động không hợp lệ.");
+    categoryId = category.id;
+  }
+  let accountId: string | null = null;
+  if (input.paymentAccountId) {
+    const [account] = await tx.select().from(schema.accounts).where(and(
+      eq(schema.accounts.userId, userId),
+      eq(schema.accounts.externalId, input.paymentAccountId),
+      sql`${schema.accounts.deletedAt} is null`,
+    ));
+    if (!account) throw new SharedFundError("payment_account_not_found", 400, "Tài khoản giao dịch tự động không hợp lệ.");
+    accountId = account.id;
+  }
+  return { categoryId, accountId };
+}
+
+function debtSnapshot(
+  debt: typeof schema.debts.$inferSelect,
+  payments: Array<typeof schema.debtPayments.$inferSelect>,
+): Debt {
+  return {
+    id: debt.externalId,
+    kind: debt.kind as Debt["kind"],
+    name: debt.name,
+    counterparty: debt.counterparty,
+    principal: debt.principal,
+    annualInterestRate: debt.annualInterestRate,
+    termMonths: debt.termMonths,
+    paymentAmount: debt.paymentAmount,
+    ...(debt.firstPaymentDate ? { firstPaymentDate: debt.firstPaymentDate } : {}),
+    note: debt.note,
+    status: debt.status as Debt["status"],
+    payments: payments.map((payment) => ({
+      id: payment.externalId,
+      installment: payment.installment,
+      paidAt: payment.paidAt,
+      amount: payment.amount,
+      principalAmount: payment.principalAmount,
+      interestAmount: payment.interestAmount,
+      note: payment.note,
+    })),
+  };
 }
 
 async function ensureLedgerYear(tx: Executor, userId: string, year: number): Promise<boolean> {
@@ -459,6 +531,17 @@ async function runCommand(
     }
     case "createTransaction":
     case "updateTransaction": {
+      if (command.kind === "updateTransaction") {
+        const [existing] = await tx.select({ id: schema.transactions.id }).from(schema.transactions).where(and(
+          eq(schema.transactions.userId, userId),
+          eq(schema.transactions.externalId, command.id),
+        ));
+        if (existing) {
+          const [linked] = await tx.select({ id: schema.debtPayments.id }).from(schema.debtPayments)
+            .where(eq(schema.debtPayments.transactionId, existing.id));
+          if (linked) throw new SharedFundError("debt_payment_transaction", 409, "Hãy sửa hoặc hoàn tác giao dịch này từ trang Vay & nợ.");
+        }
+      }
       const input = command.transaction;
       const [category] = await tx.select().from(schema.financeCategories).where(and(
         eq(schema.financeCategories.userId, userId),
@@ -511,6 +594,15 @@ async function runCommand(
       } satisfies Transaction;
     }
     case "deleteTransaction": {
+      const [existing] = await tx.select({ id: schema.transactions.id }).from(schema.transactions).where(and(
+        eq(schema.transactions.userId, userId),
+        eq(schema.transactions.externalId, command.id),
+      ));
+      if (existing) {
+        const [linked] = await tx.select({ id: schema.debtPayments.id }).from(schema.debtPayments)
+          .where(eq(schema.debtPayments.transactionId, existing.id));
+        if (linked) throw new SharedFundError("debt_payment_transaction", 409, "Hãy hoàn tác giao dịch này từ trang Vay & nợ.");
+      }
       const deleted = await tx.delete(schema.transactions).where(and(
         eq(schema.transactions.userId, userId),
         eq(schema.transactions.externalId, command.id),
@@ -693,6 +785,164 @@ async function runCommand(
       ))));
       return { ids: command.ids };
     }
+    case "createDebt": {
+      const input = command.input;
+      const { categoryId, accountId } = await debtPaymentTargets(tx, userId, input);
+      if (!input.firstPaymentDate || input.termMonths <= 0 || input.paymentAmount <= 0 || !categoryId) {
+        throw new SharedFundError("debt_schedule_incomplete", 400, "Hãy nhập đủ lịch thanh toán và danh mục giao dịch.");
+      }
+      if (input.paymentAmount * input.termMonths < input.principal) {
+        throw new SharedFundError("invalid_debt_schedule", 400, "Tổng các kỳ trả không thể nhỏ hơn số tiền gốc.");
+      }
+      const existing = await tx.select({ id: schema.debts.externalId }).from(schema.debts)
+        .where(eq(schema.debts.userId, userId));
+      const id = uniqueId(input.name, existing.map((row) => row.id));
+      await tx.insert(schema.debts).values({
+        externalId: id,
+        userId,
+        kind: input.kind,
+        name: input.name,
+        counterparty: input.counterparty,
+        principal: input.principal,
+        annualInterestRate: input.annualInterestRate,
+        termMonths: input.termMonths,
+        paymentAmount: input.paymentAmount,
+        firstPaymentDate: input.firstPaymentDate,
+        paymentCategoryId: categoryId,
+        paymentAccountId: accountId,
+        note: input.note,
+      });
+      return { id };
+    }
+    case "updateDebt": {
+      const debt = await privateDebt(tx, userId, command.id);
+      const paid = await tx.select({ id: schema.debtPayments.id }).from(schema.debtPayments)
+        .where(eq(schema.debtPayments.debtId, debt.id));
+      const scheduleFields: Array<keyof typeof command.patch> = ["kind", "principal", "termMonths", "paymentAmount", "firstPaymentDate"];
+      if (paid.length && scheduleFields.some((field) => command.patch[field] !== undefined)) {
+        throw new SharedFundError("debt_schedule_locked", 409, "Hoàn tác các kỳ đã trả trước khi sửa lịch thanh toán.");
+      }
+      const [currentCategory] = debt.paymentCategoryId
+        ? await tx.select().from(schema.financeCategories).where(eq(schema.financeCategories.id, debt.paymentCategoryId))
+        : [];
+      const [currentAccount] = debt.paymentAccountId
+        ? await tx.select().from(schema.accounts).where(eq(schema.accounts.id, debt.paymentAccountId))
+        : [];
+      const kind = command.patch.kind ?? debt.kind as Debt["kind"];
+      const paymentCategoryId = command.patch.paymentCategoryId ?? currentCategory?.externalId;
+      const paymentAccountId = command.patch.paymentAccountId ?? currentAccount?.externalId;
+      const targets = await debtPaymentTargets(tx, userId, {
+        kind,
+        ...(paymentCategoryId ? { paymentCategoryId } : {}),
+        ...(paymentAccountId ? { paymentAccountId } : {}),
+      });
+      const principal = command.patch.principal ?? debt.principal;
+      const termMonths = command.patch.termMonths ?? debt.termMonths;
+      const paymentAmount = command.patch.paymentAmount ?? debt.paymentAmount;
+      if (termMonths > 0 && paymentAmount > 0 && paymentAmount * termMonths < principal) {
+        throw new SharedFundError("invalid_debt_schedule", 400, "Tổng các kỳ trả không thể nhỏ hơn số tiền gốc.");
+      }
+      await tx.update(schema.debts).set({
+        ...(command.patch.kind !== undefined ? { kind: command.patch.kind } : {}),
+        ...(command.patch.name !== undefined ? { name: command.patch.name } : {}),
+        ...(command.patch.counterparty !== undefined ? { counterparty: command.patch.counterparty } : {}),
+        ...(command.patch.principal !== undefined ? { principal: command.patch.principal } : {}),
+        ...(command.patch.annualInterestRate !== undefined ? { annualInterestRate: command.patch.annualInterestRate } : {}),
+        ...(command.patch.termMonths !== undefined ? { termMonths: command.patch.termMonths } : {}),
+        ...(command.patch.paymentAmount !== undefined ? { paymentAmount: command.patch.paymentAmount } : {}),
+        ...(command.patch.firstPaymentDate !== undefined ? { firstPaymentDate: command.patch.firstPaymentDate || null } : {}),
+        ...(command.patch.paymentCategoryId !== undefined || command.patch.kind !== undefined ? { paymentCategoryId: targets.categoryId } : {}),
+        ...(command.patch.paymentAccountId !== undefined ? { paymentAccountId: targets.accountId } : {}),
+        ...(command.patch.note !== undefined ? { note: command.patch.note } : {}),
+        updatedAt: new Date(),
+      }).where(eq(schema.debts.id, debt.id));
+      return { id: command.id };
+    }
+    case "deleteDebt": {
+      const debt = await privateDebt(tx, userId, command.id);
+      const payments = await tx.select().from(schema.debtPayments).where(eq(schema.debtPayments.debtId, debt.id));
+      const transactionIds = payments.flatMap((payment) => payment.transactionId ? [payment.transactionId] : []);
+      await tx.delete(schema.debtPayments).where(eq(schema.debtPayments.debtId, debt.id));
+      if (transactionIds.length) await tx.delete(schema.transactions).where(inArray(schema.transactions.id, transactionIds));
+      await tx.delete(schema.debts).where(eq(schema.debts.id, debt.id));
+      return { deletedId: command.id } satisfies DeleteMutationResult;
+    }
+    case "recordDebtPayment": {
+      const debt = await privateDebt(tx, userId, command.id);
+      if (!debt.firstPaymentDate || debt.termMonths <= 0 || debt.paymentAmount <= 0 || !debt.paymentCategoryId) {
+        throw new SharedFundError("debt_schedule_incomplete", 400, "Hãy hoàn thiện lịch thanh toán trước.");
+      }
+      const payments = await tx.select().from(schema.debtPayments).where(eq(schema.debtPayments.debtId, debt.id))
+        .orderBy(asc(schema.debtPayments.installment));
+      const snapshot = debtSnapshot(debt, payments);
+      const next = debtSchedule(snapshot).find((item) => !item.payment);
+      if (!next) throw new SharedFundError("debt_settled", 400, "Khoản này đã được thanh toán xong.");
+      const [category] = await tx.select().from(schema.financeCategories).where(and(
+        eq(schema.financeCategories.id, debt.paymentCategoryId),
+        eq(schema.financeCategories.userId, userId),
+        sql`${schema.financeCategories.deletedAt} is null`,
+      ));
+      if (!category) throw new SharedFundError("payment_category_not_found", 400, "Danh mục giao dịch tự động đã bị xoá. Hãy cập nhật khoản nợ.");
+      let accountId: string | null = null;
+      if (debt.paymentAccountId) {
+        const [account] = await tx.select().from(schema.accounts).where(and(
+          eq(schema.accounts.id, debt.paymentAccountId),
+          eq(schema.accounts.userId, userId),
+          sql`${schema.accounts.deletedAt} is null`,
+        ));
+        if (!account) throw new SharedFundError("payment_account_not_found", 400, "Tài khoản giao dịch tự động đã bị xoá. Hãy cập nhật khoản nợ.");
+        accountId = account.id;
+      }
+      const transactionExternalId = `debt-${debt.externalId}-${next.installment}`;
+      const note = command.note || `${debt.kind === "lent" ? "Thu hồi" : "Thanh toán"} ${debt.name} — kỳ ${next.installment}`;
+      const [transaction] = await tx.insert(schema.transactions).values({
+        externalId: transactionExternalId,
+        userId,
+        categoryId: category.id,
+        accountId,
+        date: command.paidAt,
+        type: debt.kind === "lent" ? "income" : "expense",
+        amount: next.amount,
+        note,
+      }).returning({ id: schema.transactions.id, externalId: schema.transactions.externalId });
+      const paymentId = crypto.randomUUID();
+      await tx.insert(schema.debtPayments).values({
+        externalId: paymentId,
+        debtId: debt.id,
+        installment: next.installment,
+        paidAt: command.paidAt,
+        amount: next.amount,
+        principalAmount: next.principalAmount,
+        interestAmount: next.interestAmount,
+        transactionId: transaction!.id,
+        note,
+      });
+      const remaining = debtRemainingBalance({ ...snapshot, payments: [...snapshot.payments, {
+        id: paymentId,
+        installment: next.installment,
+        paidAt: command.paidAt,
+        amount: next.amount,
+        principalAmount: next.principalAmount,
+        interestAmount: next.interestAmount,
+        note,
+      }] });
+      if (remaining === 0) await tx.update(schema.debts).set({ status: "settled", updatedAt: new Date() }).where(eq(schema.debts.id, debt.id));
+      return { debtId: command.id, paymentId, transactionId: transaction!.externalId };
+    }
+    case "deleteDebtPayment": {
+      const debt = await privateDebt(tx, userId, command.id);
+      const payments = await tx.select().from(schema.debtPayments).where(eq(schema.debtPayments.debtId, debt.id))
+        .orderBy(desc(schema.debtPayments.installment));
+      const payment = payments.find((entry) => entry.externalId === command.paymentId);
+      if (!payment) throw new SharedFundError("debt_payment_not_found", 404, "Không tìm thấy kỳ thanh toán.");
+      if (payments[0]?.id !== payment.id) {
+        throw new SharedFundError("debt_payment_not_latest", 409, "Chỉ có thể hoàn tác kỳ thanh toán gần nhất.");
+      }
+      await tx.delete(schema.debtPayments).where(eq(schema.debtPayments.id, payment.id));
+      if (payment.transactionId) await tx.delete(schema.transactions).where(eq(schema.transactions.id, payment.transactionId));
+      await tx.update(schema.debts).set({ status: "active", updatedAt: new Date() }).where(eq(schema.debts.id, debt.id));
+      return { deletedId: command.paymentId } satisfies DeleteMutationResult;
+    }
     case "market": {
       const { quotes } = command;
       if (quotes.fx) {
@@ -866,6 +1116,21 @@ export async function mutatePersonalResource<T>(
   expectedRevision: number,
   command: PersonalMutationCommand,
 ): Promise<PersonalMutationResponse<T>> {
+  return mutatePersonalResourceWithResult<T, T>(db, userId, expectedRevision, command, async (_tx, data) => data);
+}
+
+/**
+ * Runs a personal mutation and builds a read model before the workspace lock is
+ * released. This lets the response describe the exact state committed by the
+ * mutation without a follow-up HTTP read.
+ */
+export async function mutatePersonalResourceWithResult<T, TResult>(
+  db: FinanceDatabase,
+  userId: string,
+  expectedRevision: number,
+  command: PersonalMutationCommand,
+  result: (tx: Executor, data: T) => Promise<TResult>,
+): Promise<PersonalMutationResponse<TResult>> {
   return db.transaction(async (tx) => {
     const lockResult: any = await tx.execute(sql`
       select workspace_revision from users where id = ${userId} for update
@@ -876,12 +1141,13 @@ export async function mutatePersonalResource<T>(
       throw new SharedFundError("revision_conflict", 409, "Dữ liệu đã được cập nhật ở nơi khác. Hãy tải lại.");
     }
     const data = await runCommand(tx, userId, command) as T;
+    const responseData = await result(tx, data);
     const workspaceRevision = current + 1;
     await tx.update(schema.users).set({
       workspaceRevision,
       updatedAt: new Date(),
     }).where(eq(schema.users.id, userId));
-    return { data, workspaceRevision };
+    return { data: responseData, workspaceRevision };
   });
 }
 

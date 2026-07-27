@@ -160,7 +160,8 @@ export function FundsPage() {
   }, 0);
   const openingAssets = ledger.funds.reduce((sum, fund) => sum + (ledger.financialProfile.openingBalances[fund.id] ?? 0), 0);
   const assets = accumulatedAssets + openingAssets;
-  const debt = ledger.financialProfile.debt.balance;
+  const debt = fundOverview?.debtSummary?.liabilities ?? ledger.financialProfile.debt.balance;
+  const receivables = fundOverview?.debtSummary?.receivables ?? 0;
 
   const resetMonth = (): void => {
     if (!window.confirm(`Xóa toàn bộ phân bổ quỹ và ghi chú của ${MONTHS_FULL[month]} / ${year}?`)) return;
@@ -216,8 +217,8 @@ export function FundsPage() {
         </div>
         <Stat label="Trung bình" value={fmt(scopeMonths ? scopeTotal / scopeMonths : 0)} meta={`${scopeMonths} tháng có nhập`} />
         <Stat label="Tổng tài sản" value={fmt(assets)} meta="lũy kế + số dư ban đầu" accent="blue" />
-        <Stat label="Dư nợ" value={fmt(debt)} meta={ledger.financialProfile.debt.monthlyPayment ? `trả ${fmt(ledger.financialProfile.debt.monthlyPayment)}/tháng` : "chưa thiết lập khoản trả"} accent="rust" />
-        <Stat label="Tài sản ròng" value={fmt(assets - debt)} meta="tài sản − dư nợ" accent="green" />
+        <Stat label="Nợ phải trả" value={fmt(debt)} meta={receivables ? `phải thu ${fmt(receivables)}` : "xem chi tiết ở Vay & nợ"} accent="rust" />
+        <Stat label="Tài sản ròng" value={fmt(assets + receivables - debt)} meta="tài sản + phải thu − nợ" accent="green" />
       </div>
 
       <div className="grid">

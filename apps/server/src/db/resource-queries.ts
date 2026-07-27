@@ -34,6 +34,7 @@ import type {
 } from "@chi-tieu/shared";
 import type { FinanceDatabase } from "./client.js";
 import * as schema from "./schema.js";
+import { readDebtSummary } from "./debt-queries.js";
 
 type Executor = FinanceDatabase;
 
@@ -399,7 +400,7 @@ export async function readFundOverview(
 ): Promise<FundOverviewResponse> {
   const fundRows = await accessibleFunds(db, userId);
   const ids = fundRows.map((fund) => fund.id);
-  const [yearMonths, allTimeTotals, periodTotals, goals, contributions, notes, settings, incomeRows, assetRows, market] = await Promise.all([
+  const [yearMonths, allTimeTotals, periodTotals, goals, contributions, notes, settings, incomeRows, assetRows, market, debtSummary] = await Promise.all([
     ids.length ? db.select({
       fundId: schema.fundMonths.fundId,
       month: schema.fundMonths.month,
@@ -457,6 +458,7 @@ export async function readFundOverview(
       .leftJoin(schema.holdingLots, eq(schema.holdingLots.detailId, schema.fundMonthDetails.id))
       .where(inArray(schema.funds.id, ids)) : [],
     readMarket(db, userId),
+    readDebtSummary(db, userId),
   ]);
   const [note] = notes;
   const [setting] = settings;
@@ -495,6 +497,7 @@ export async function readFundOverview(
       balance: setting?.debtBalance ?? 0,
       monthlyPayment: setting?.debtMonthlyPayment ?? 0,
     },
+    debtSummary,
     funds: fundRows.map((fund): FundOverviewItem => {
       const yearAmounts = yearAmountsByFund.get(fund.id) ?? new Array<number>(12).fill(0);
       const periodContributions = contributions.filter((entry) => entry.fundId === fund.id);

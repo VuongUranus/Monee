@@ -6,9 +6,14 @@ import type {
   AuthMeResponse,
   CategoryCreateRequest,
   CategoryPatchRequest,
+  DebtCreateRequest,
+  DebtDetailResponse,
+  DebtOverviewResponse,
+  DebtPatchRequest,
   DeleteMutationResult,
   ExpenseConfigResponse,
   ExpenseMonthSummaryResponse,
+  ExpenseTransactionView,
   FinanceBootstrapResponse,
   FinanceCategory,
   FinancePreferences,
@@ -28,10 +33,10 @@ import type {
   StatisticsScope,
   StoredFinancePayload,
   SharedFundRole,
-  Transaction,
   TransactionMutationRequest,
   TransactionPageResponse,
   TransactionQuery,
+  TransactionMutationResult,
 } from "@chi-tieu/shared";
 
 export class UnauthorizedError extends Error {
@@ -106,6 +111,8 @@ export const api = {
     if (query.q) search.set("q", query.q);
     return request(`/api/transactions?${search}`);
   },
+  loadDebts: (): Promise<DebtOverviewResponse> => request("/api/debts"),
+  loadDebtDetail: (id: string): Promise<DebtDetailResponse> => request(`/api/debts/${encodeURIComponent(id)}`),
   loadFundOverview: (year: number, month: number, fresh = false): Promise<FundOverviewResponse> =>
     request(`/api/funds/overview?year=${year}&month=${month}`, undefined, fresh),
   loadFundMonthDetail: (id: string, year: number, month: number): Promise<FundMonthDetailResponse> =>
@@ -160,13 +167,41 @@ export const api = {
   updateFundGoal: (id: string, year: number | null, amount: number, expectedRevision: number): Promise<PersonalMutationResponse<{ fundId: string; year: number | null; amount: number }>> => request(`/api/funds/${encodeURIComponent(id)}/goals`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, year, amount }),
   }),
-  createTransaction: (transaction: TransactionMutationRequest["transaction"], expectedRevision: number): Promise<PersonalMutationResponse<Transaction>> => request("/api/transactions", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, transaction }),
+  createTransaction: (
+    transaction: TransactionMutationRequest["transaction"],
+    expenseView: ExpenseTransactionView,
+    expectedRevision: number,
+  ): Promise<PersonalMutationResponse<TransactionMutationResult>> => request("/api/transactions", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, transaction, expenseView }),
   }),
-  updateTransaction: (id: string, transaction: TransactionMutationRequest["transaction"], expectedRevision: number): Promise<PersonalMutationResponse<Transaction>> => request(`/api/transactions/${encodeURIComponent(id)}`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, transaction }),
+  updateTransaction: (
+    id: string,
+    transaction: TransactionMutationRequest["transaction"],
+    expenseView: ExpenseTransactionView,
+    expectedRevision: number,
+  ): Promise<PersonalMutationResponse<TransactionMutationResult>> => request(`/api/transactions/${encodeURIComponent(id)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, transaction, expenseView }),
   }),
-  deleteTransaction: (id: string, expectedRevision: number): Promise<PersonalMutationResponse<DeleteMutationResult>> => request(`/api/transactions/${encodeURIComponent(id)}`, {
+  deleteTransaction: (
+    id: string,
+    expenseView: ExpenseTransactionView,
+    expectedRevision: number,
+  ): Promise<PersonalMutationResponse<TransactionMutationResult>> => request(`/api/transactions/${encodeURIComponent(id)}`, {
+    method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, expenseView }),
+  }),
+  createDebt: (debt: Omit<DebtCreateRequest, "expectedRevision">["debt"], expectedRevision: number): Promise<PersonalMutationResponse<{ id: string }>> => request("/api/debts", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, debt }),
+  }),
+  updateDebt: (id: string, debt: Omit<DebtPatchRequest, "expectedRevision">["debt"], expectedRevision: number): Promise<PersonalMutationResponse<{ id: string }>> => request(`/api/debts/${encodeURIComponent(id)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, debt }),
+  }),
+  deleteDebt: (id: string, expectedRevision: number): Promise<PersonalMutationResponse<DeleteMutationResult>> => request(`/api/debts/${encodeURIComponent(id)}`, {
+    method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision }),
+  }),
+  recordDebtPayment: (id: string, paidAt: string, note: string, expectedRevision: number): Promise<PersonalMutationResponse<{ debtId: string; paymentId: string; transactionId: string }>> => request(`/api/debts/${encodeURIComponent(id)}/payments`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, paidAt, note }),
+  }),
+  deleteDebtPayment: (id: string, paymentId: string, expectedRevision: number): Promise<PersonalMutationResponse<DeleteMutationResult>> => request(`/api/debts/${encodeURIComponent(id)}/payments/${encodeURIComponent(paymentId)}`, {
     method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision }),
   }),
   createCategory: (input: Omit<CategoryCreateRequest, "expectedRevision">, expectedRevision: number): Promise<PersonalMutationResponse<FinanceCategory>> => request("/api/categories", {

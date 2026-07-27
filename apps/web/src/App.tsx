@@ -16,6 +16,10 @@ const StatisticsPage = lazy(async () => {
   const module = await import("@/features/statistics/StatisticsPage");
   return { default: module.StatisticsPage };
 });
+const DebtsPage = lazy(async () => {
+  const module = await import("@/features/debts/DebtsPage");
+  return { default: module.DebtsPage };
+});
 
 export default function App() {
   const auth = useFinanceStore((state) => state.auth);
@@ -35,6 +39,7 @@ export default function App() {
           <Route path="/expenses" element={<ExpensesPage />} />
           <Route path="/funds" element={<FundsPage />} />
           <Route path="/statistics" element={<StatisticsPage />} />
+          <Route path="/debts" element={<DebtsPage />} />
           <Route path="*" element={<Navigate to="/expenses" replace />} />
         </Routes>
       </Suspense>

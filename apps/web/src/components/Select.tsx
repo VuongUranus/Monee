@@ -16,6 +16,7 @@ interface SelectProps<T extends SelectValue> {
   ariaLabel: string;
   className?: string;
   compact?: boolean;
+  disabled?: boolean;
 }
 
 const menuGap = 8;
@@ -30,6 +31,7 @@ export function Select<T extends SelectValue>({
   ariaLabel,
   className,
   compact = false,
+  disabled = false,
 }: SelectProps<T>) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listboxRef = useRef<HTMLDivElement>(null);
@@ -226,6 +228,7 @@ export function Select<T extends SelectValue>({
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
         aria-haspopup="listbox"
+        disabled={disabled}
         onClick={() => {
           if (open) closeAndRestoreFocus();
           else openAt(currentIndex);

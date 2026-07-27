@@ -11,6 +11,7 @@ interface DateFieldProps {
   max?: string;
   className?: string;
   ariaLabel?: string;
+  disabled?: boolean;
 }
 
 function parseDate(value?: string): Date | undefined {
@@ -19,7 +20,7 @@ function parseDate(value?: string): Date | undefined {
   return isValid(date) ? date : undefined;
 }
 
-export function DateField({ value, onChange, min, max, className = "", ariaLabel }: DateFieldProps) {
+export function DateField({ value, onChange, min, max, className = "", ariaLabel, disabled = false }: DateFieldProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const selected = parseDate(value);
@@ -52,6 +53,7 @@ export function DateField({ value, onChange, min, max, className = "", ariaLabel
         type="button"
         aria-label={ariaLabel ?? "Chọn ngày"}
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((current) => !current)}
       >
         <span>{selected ? format(selected, "dd/MM/yyyy", { locale: vi }) : "Chọn ngày"}</span>
