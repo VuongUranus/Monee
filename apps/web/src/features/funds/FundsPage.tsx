@@ -8,6 +8,7 @@ import type {
   GoldLot,
   HoldingDetail,
   HoldingLot,
+  FundOverviewItem,
   SharedFundContributionsResponse,
   SharedFundMembersResponse,
   SharedFundRole,
@@ -33,6 +34,15 @@ import {
   slugId,
 } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
+
+function sumFundAmounts(amounts: number[] | undefined): number {
+  return (amounts ?? []).reduce((total, amount) => total + amount, 0);
+}
+
+function liveAllTimeTotal(overview: FundOverviewItem | undefined, yearTotal: number): number {
+  if (!overview) return yearTotal;
+  return overview.allTimeTotal + yearTotal - overview.yearTotal;
+}
 
 export function FundsPage() {
   const ledger = useFinanceStore((state) => state.ledger);
@@ -65,14 +75,24 @@ export function FundsPage() {
     notes: new Array<string>(12).fill(""),
   };
   const income = fundOverview?.income ?? 0;
-  const total = fundOverview?.funds.reduce((sum, fund) => sum + fund.monthAmount, 0) ?? 0;
-  const totalYtd = fundOverview?.funds.reduce((sum, fund) => sum + fund.yearTotal, 0) ?? 0;
-  const scopeTotal = fundOverview?.funds.reduce((sum, fund) =>
-    sum + (scope === "all" ? fund.allTimeTotal : fund.yearTotal), 0) ?? 0;
+  const total = ledger.funds.reduce((sum, fund) => sum + (yearData.funds[fund.id]?.[month] ?? 0), 0);
+  const totalYtd = ledger.funds.reduce((sum, fund) => sum + sumFundAmounts(yearData.funds[fund.id]), 0);
+  const activeYearMonths = Array.from({ length: 12 }, (_, monthIndex) =>
+    ledger.funds.reduce((sum, fund) => sum + (yearData.funds[fund.id]?.[monthIndex] ?? 0), 0) > 0,
+  ).filter(Boolean).length;
+  const scopeTotal = scope === "all"
+    ? ledger.funds.reduce((sum, fund) => {
+      const overview = fundOverview?.funds.find((item) => item.id === fund.id);
+      return sum + liveAllTimeTotal(overview, sumFundAmounts(yearData.funds[fund.id]));
+    }, 0)
+    : totalYtd;
   const scopeMonths = scope === "all"
     ? fundOverview?.allTimeActiveMonths ?? 0
-    : fundOverview?.yearActiveMonths ?? 0;
-  const accumulatedAssets = fundOverview?.funds.reduce((sum, fund) => sum + fund.allTimeTotal, 0) ?? 0;
+    : activeYearMonths;
+  const accumulatedAssets = ledger.funds.reduce((sum, fund) => {
+    const overview = fundOverview?.funds.find((item) => item.id === fund.id);
+    return sum + liveAllTimeTotal(overview, sumFundAmounts(yearData.funds[fund.id]));
+  }, 0);
   const openingAssets = ledger.funds.reduce((sum, fund) => sum + (ledger.financialProfile.openingBalances[fund.id] ?? 0), 0);
   const assets = accumulatedAssets + openingAssets;
   const debt = ledger.financialProfile.debt.balance;
@@ -149,6 +169,7 @@ export function FundsPage() {
                   const overview = fundOverview?.funds.find((item) => item.id === fund.id);
                   const contributed = overview?.contributionAmount ?? 0;
                   const contributionCount = overview?.contributionCount ?? 0;
+                  const yearTotal = sumFundAmounts(yearData.funds[fund.id]);
                   return (
                     <tr key={fund.id}>
                       <td><span className="fund-tag" style={{ background: fund.color }} />{fund.name}<small className="table-meta">{FUND_CATEGORIES[category].short}</small></td>
@@ -180,7 +201,7 @@ export function FundsPage() {
                       </td>
                       <td>{fund.sharing ? <button className="computed-button" type="button" onClick={() => setContributionFundId(fund.id)}><strong>{fmt(contributed)}</strong><small>{contributionCount ? `${contributionCount} khoản` : "Ghi nhận"}</small></button> : "—"}</td>
                       <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
-                      <td>{fmt(fundOverview?.funds.find((item) => item.id === fund.id)?.yearTotal ?? 0)}</td>
+                      <td>{fmt(yearTotal)}</td>
                     </tr>
                   );
                 })}
@@ -273,6 +294,7 @@ function GoalsTable() {
   const month = useFinanceStore((state) => state.selectedMonth);
   const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
+  const yearData = ledger.years[String(year)];
   const saveGoal = (fund: Fund, goalYear: number | null, value: number, recipe: (draft: any) => void): void => {
     if (fund.sharing) {
       void mutateSharedLedger(fund.id, recipe, (revision) =>
@@ -282,11 +304,14 @@ function GoalsTable() {
       mutateLedger(recipe, (expectedRevision) => api.updateFundGoal(fund.id, goalYear, value, expectedRevision));
     }
   };
-  const totals = (fundOverview?.funds ?? []).reduce((result, fund) => {
-    result.yearGoal += fund.yearGoal;
-    result.allGoal += fund.allGoal;
-    result.ytd += fund.yearTotal;
-    result.all += fund.allTimeTotal;
+  const totals = ledger.funds.reduce((result, fund) => {
+    const overview = fundOverview?.funds.find((item) => item.id === fund.id);
+    const goal = ledger.goals[fund.id] ?? { years: {}, all: 0 };
+    const ytd = sumFundAmounts(yearData?.funds[fund.id]);
+    result.yearGoal += goal.years[String(year)] ?? 0;
+    result.allGoal += goal.all;
+    result.ytd += ytd;
+    result.all += liveAllTimeTotal(overview, ytd);
     return result;
   }, { yearGoal: 0, allGoal: 0, ytd: 0, all: 0 });
 
@@ -299,10 +324,10 @@ function GoalsTable() {
             {ledger.funds.map((fund) => {
               const overview = fundOverview?.funds.find((item) => item.id === fund.id);
               const goal = ledger.goals[fund.id] ?? { years: {}, all: 0 };
-              const yearGoal = overview?.yearGoal ?? goal.years[String(year)] ?? 0;
-              const allGoal = overview?.allGoal ?? goal.all;
-              const ytd = overview?.yearTotal ?? 0;
-              const all = overview?.allTimeTotal ?? 0;
+              const yearGoal = goal.years[String(year)] ?? 0;
+              const allGoal = goal.all;
+              const ytd = sumFundAmounts(yearData?.funds[fund.id]);
+              const all = liveAllTimeTotal(overview, ytd);
               const remaining = Math.max(0, yearGoal - ytd);
               const need = remaining > 0 ? Math.ceil(remaining / (12 - month)) : 0;
               return (

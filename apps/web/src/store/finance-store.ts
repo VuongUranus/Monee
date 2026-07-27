@@ -62,7 +62,7 @@ interface FinanceState {
   bootstrap(): Promise<void>;
   loadExpenses(query?: Partial<TransactionQuery>): Promise<void>;
   loadTransactions(query: TransactionQuery): Promise<void>;
-  loadFunds(): Promise<void>;
+  loadFunds(fresh?: boolean): Promise<void>;
   loadFundDetail(fundId: string): Promise<FundMonthDetailResponse | null>;
   loadStatistics(scope?: StatisticsScope): Promise<void>;
   beginLogin(): void;
@@ -253,7 +253,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
   };
 
   const refreshCurrentRoute = async (preserveTransactionQuery = false): Promise<void> => {
-    if (location.pathname === "/funds") await get().loadFunds();
+    if (location.pathname === "/funds") await get().loadFunds(true);
     else if (location.pathname === "/statistics") await get().loadStatistics();
     else await get().loadExpenses(preserveTransactionQuery ? get().transactionQuery ?? {} : {});
   };
@@ -443,12 +443,12 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       }
     },
 
-    async loadFunds() {
+    async loadFunds(fresh = false) {
       const requestId = ++fundsRequest;
       const { selectedYear: year, selectedMonth } = get();
       set((state) => { state.fundsState = "loading"; });
       try {
-        const overview = await api.loadFundOverview(year, selectedMonth + 1);
+        const overview = await api.loadFundOverview(year, selectedMonth + 1, fresh);
         if (requestId !== fundsRequest) return;
         applyFundOverview(overview);
         set((state) => {
@@ -569,7 +569,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           state.saveState = "saved";
           state.saveMessage = "Đã lưu thay đổi.";
         });
-        await get().loadFunds();
+        await get().loadFunds(true);
       });
       writeQueue = operation.then(() => undefined, () => undefined);
       try {
@@ -581,7 +581,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
             state.saveState = "error";
             state.saveMessage = "Quỹ chung đã thay đổi. Đang tải lại dữ liệu…";
           });
-          await get().loadFunds();
+          await get().loadFunds(true);
         }
         throw error;
       }
@@ -590,14 +590,14 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     async shareFund(fundId, email, role) {
       const result = await api.createSharedFund(fundId, email, role, get().workspaceRevision);
       set((state) => { state.workspaceRevision = result.workspaceRevision; });
-      await get().loadFunds();
+      await get().loadFunds(true);
     },
 
     async deleteSharedFund(fundId) {
       const shared = get().sharedFunds[fundId];
       if (!shared) throw new Error("Không tìm thấy quỹ chung.");
       await api.deleteSharedFund(fundId, shared.revision);
-      await get().loadFunds();
+      await get().loadFunds(true);
     },
 
     replaceLedger(ledger, shouldPersist = true) {
@@ -640,7 +640,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           if (state.bootstrapData) state.bootstrapData.workspaceRevision = result.workspaceRevision;
           mergeMarketResponse(state.ledger, result.quotes);
         });
-        await get().loadFunds();
+        await get().loadFunds(true);
         return result;
       } catch (error) {
         if (error instanceof UnauthorizedError) markUnauthorized();

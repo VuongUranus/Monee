@@ -66,9 +66,13 @@ async function performRequest<T>(url: string, init?: RequestInit): Promise<T> {
  * also overlap with period-change actions, so coalesce identical reads while the
  * first request is still pending. Mutations are intentionally never coalesced.
  */
-function request<T>(url: string, init?: RequestInit): Promise<T> {
+function request<T>(url: string, init?: RequestInit, fresh = false): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
   if (method !== "GET") return performRequest<T>(url, init);
+
+  // A read issued after a mutation must not reuse a request that started before
+  // that mutation completed, because its response can contain stale data.
+  if (fresh) return performRequest<T>(url, init);
 
   const existing = inFlightGetRequests.get(url);
   if (existing) return existing as Promise<T>;
@@ -102,8 +106,8 @@ export const api = {
     if (query.q) search.set("q", query.q);
     return request(`/api/transactions?${search}`);
   },
-  loadFundOverview: (year: number, month: number): Promise<FundOverviewResponse> =>
-    request(`/api/funds/overview?year=${year}&month=${month}`),
+  loadFundOverview: (year: number, month: number, fresh = false): Promise<FundOverviewResponse> =>
+    request(`/api/funds/overview?year=${year}&month=${month}`, undefined, fresh),
   loadFundMonthDetail: (id: string, year: number, month: number): Promise<FundMonthDetailResponse> =>
     request(`/api/funds/${encodeURIComponent(id)}/months/${year}/${month}`),
   loadSharedFundMembers: (id: string): Promise<SharedFundMembersResponse> =>

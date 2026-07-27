@@ -26,4 +26,22 @@ describe("API read requests", () => {
     resolveResponse?.(new Response(JSON.stringify({ workspaceRevision: 2 }), { status: 200 }));
     await expect(third).resolves.toEqual({ workspaceRevision: 2 });
   });
+
+  it("lấy phản hồi mới sau khi dữ liệu quỹ thay đổi", async () => {
+    const resolvers: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const beforeMutation = api.loadFundOverview(2026, 7);
+    const afterMutation = api.loadFundOverview(2026, 7, true);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    resolvers[0]?.(new Response(JSON.stringify({ amount: 2_500_000 }), { status: 200 }));
+    resolvers[1]?.(new Response(JSON.stringify({ amount: 5_500_000 }), { status: 200 }));
+
+    await expect(beforeMutation).resolves.toEqual({ amount: 2_500_000 });
+    await expect(afterMutation).resolves.toEqual({ amount: 5_500_000 });
+  });
 });
