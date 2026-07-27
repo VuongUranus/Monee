@@ -5,7 +5,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { createDefaultStore } from "@chi-tieu/shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/application.js";
 import { parseDotEnv } from "../src/lib/config.js";
 import { SESSION_TTL_MS } from "../src/lib/session.js";
 import type { FetchLike } from "../src/services/market.js";

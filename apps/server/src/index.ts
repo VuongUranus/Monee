@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp } from "./app.js";
+import { buildApp } from "./application.js";
 import { createConfig, loadEnvironment } from "./lib/config.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));

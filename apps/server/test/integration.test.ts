@@ -11,7 +11,7 @@ import { createDefaultStore } from "@chi-tieu/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/application.js";
 import { importUserDatabase, verifyUserDatabase } from "../src/db/data-migration.js";
 import * as schema from "../src/db/schema.js";
 import type { MarketService } from "../src/services/market.js";

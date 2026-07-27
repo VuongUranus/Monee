@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StoredFinancePayload, UserProfile } from "@chi-tieu/shared";
-import { buildApp } from "../src/app.js";
+import { buildApp } from "../src/application.js";
 import { SESSION_TTL_MS } from "../src/lib/session.js";
 import { createPostgresTestContext, seedUser } from "./postgres.js";
 
