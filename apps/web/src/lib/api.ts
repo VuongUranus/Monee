@@ -41,6 +41,7 @@ import type {
   TransactionQuery,
   TransactionMutationResult,
 } from "@chi-tieu/shared";
+import { beginApiActivity, pushToast, type ApiActivityKind } from "./api-feedback";
 
 export class UnauthorizedError extends Error {
   constructor() {
@@ -58,15 +59,42 @@ export class ApiRequestError extends Error {
 
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
-async function performRequest<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { cache: "no-store", ...init });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: string; message?: string } | null;
-    throw new ApiRequestError(response.status, body?.error ?? "request_failed", body?.message ?? `Yêu cầu thất bại (${response.status}).`);
+interface RequestFeedbackOptions {
+  track?: boolean;
+  notifyError?: boolean;
+}
+
+function activityMeta(url: string, method: string): { kind: ApiActivityKind; scope: string; label: string } {
+  const kind: ApiActivityKind = method === "GET" ? "read" : "write";
+  const scope = url.includes("/statistics") ? "statistics"
+    : url.includes("/funds") ? "funds"
+      : url.includes("/debts") ? "debts"
+        : url.includes("/transactions") || url.includes("/expenses") ? "expenses"
+          : url.includes("/assistant") ? "assistant"
+            : "workspace";
+  return { kind, scope, label: kind === "write" ? "Đang lưu thay đổi…" : "Đang tải dữ liệu…" };
+}
+
+async function performRequest<T>(url: string, init?: RequestInit, feedback: RequestFeedbackOptions = {}): Promise<T> {
+  const method = init?.method?.toUpperCase() ?? "GET";
+  const finish = feedback.track === false ? undefined : beginApiActivity(activityMeta(url, method));
+  try {
+    const response = await fetch(url, { cache: "no-store", ...init });
+    if (response.status === 401) throw new UnauthorizedError();
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: string; message?: string } | null;
+      throw new ApiRequestError(response.status, body?.error ?? "request_failed", body?.message ?? `Yêu cầu thất bại (${response.status}).`);
+    }
+    if (response.status === 204) return undefined as T;
+    return response.json() as Promise<T>;
+  } catch (error) {
+    if (feedback.notifyError !== false && !(error instanceof UnauthorizedError)) {
+      pushToast("error", error instanceof Error ? error.message : "Không thể kết nối tới máy chủ.");
+    }
+    throw error;
+  } finally {
+    finish?.();
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
 }
 
 /**
@@ -74,18 +102,18 @@ async function performRequest<T>(url: string, init?: RequestInit): Promise<T> {
  * also overlap with period-change actions, so coalesce identical reads while the
  * first request is still pending. Mutations are intentionally never coalesced.
  */
-function request<T>(url: string, init?: RequestInit, fresh = false): Promise<T> {
+function request<T>(url: string, init?: RequestInit, fresh = false, feedback?: RequestFeedbackOptions): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
-  if (method !== "GET") return performRequest<T>(url, init);
+  if (method !== "GET") return performRequest<T>(url, init, feedback);
 
   // A read issued after a mutation must not reuse a request that started before
   // that mutation completed, because its response can contain stale data.
-  if (fresh) return performRequest<T>(url, init);
+  if (fresh) return performRequest<T>(url, init, feedback);
 
   const existing = inFlightGetRequests.get(url);
   if (existing) return existing as Promise<T>;
 
-  const operation = performRequest<T>(url, init);
+  const operation = performRequest<T>(url, init, feedback);
   inFlightGetRequests.set(url, operation);
   const clear = (): void => {
     if (inFlightGetRequests.get(url) === operation) inFlightGetRequests.delete(url);
@@ -95,19 +123,19 @@ function request<T>(url: string, init?: RequestInit, fresh = false): Promise<T> 
 }
 
 export const api = {
-  me: (): Promise<AuthMeResponse> => request("/api/auth/me"),
-  loadData: (): Promise<FinanceBootstrapResponse> => request("/api/data"),
+  me: (): Promise<AuthMeResponse> => request("/api/auth/me", undefined, false, { notifyError: false }),
+  loadData: (): Promise<FinanceBootstrapResponse> => request("/api/data", undefined, false, { notifyError: false }),
   sendAssistantMessage: (payload: AssistantMessageRequest): Promise<AssistantMessageResponse> => request("/api/assistant/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-  }),
+  }, false, { track: false, notifyError: false }),
   confirmAssistantAction: (confirmationToken: string): Promise<AssistantConfirmResponse> => request("/api/assistant/actions/confirm", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirmationToken }),
   }),
-  exportBackup: (): Promise<StoredFinancePayload> => request("/api/backup/export"),
+  exportBackup: (): Promise<StoredFinancePayload> => request("/api/backup/export", undefined, false, { notifyError: false }),
   loadExpenseConfig: (): Promise<ExpenseConfigResponse> => request("/api/expenses/config"),
   loadExpenseSummary: (year: number, month: number): Promise<ExpenseMonthSummaryResponse> =>
     request(`/api/expenses/summary?year=${year}&month=${month}`),
@@ -149,7 +177,7 @@ export const api = {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ data: payload, expectedRevision }),
-  }),
+  }, false, { notifyError: false }),
   updatePreferences: (expectedRevision: number, patch: Record<string, unknown>): Promise<PersonalMutationResponse<FinancePreferences>> => request("/api/preferences", {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRevision, ...patch }),
   }),

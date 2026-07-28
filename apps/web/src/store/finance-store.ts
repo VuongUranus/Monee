@@ -27,6 +27,7 @@ import type { Draft } from "immer";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { api, ApiRequestError, UnauthorizedError } from "@/lib/api";
+import { pushToast } from "@/lib/api-feedback";
 import {
   blankYearWith,
   createDefaultStore,
@@ -43,6 +44,7 @@ type RefreshPolicy = "route" | "none";
 interface MutationOptions<T> {
   refresh?: RefreshPolicy;
   invalidateExpenseConfig?: boolean;
+  notifySuccess?: boolean;
   reconcile?: (state: Draft<FinanceState>, data: T) => void;
 }
 
@@ -93,16 +95,17 @@ interface FinanceState {
     recipe: (draft: Draft<FinanceStore>) => void,
     request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
     options?: MutationOptions<T>,
-  ): void;
+  ): Promise<void>;
   mutateExpenseConfig<T>(
     recipe: (draft: Draft<FinanceStore>) => void,
     request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
-  ): void;
-  createTransaction(transaction: Transaction): void;
+    options?: Pick<MutationOptions<T>, "notifySuccess">,
+  ): Promise<void>;
+  createTransaction(transaction: Transaction): Promise<void>;
   applyAssistantConfirmation(response: AssistantConfirmResponse): Promise<void>;
   reloadAfterAssistantConflict(): Promise<void>;
-  updateTransaction(transaction: Transaction): void;
-  deleteTransaction(id: string): void;
+  updateTransaction(transaction: Transaction): Promise<void>;
+  deleteTransaction(id: string): Promise<void>;
   mutateSharedLedger<T>(
     fundId: string,
     recipe: (draft: Draft<FinanceStore>) => void,
@@ -112,7 +115,7 @@ interface FinanceState {
   shareFund(fundId: string, email: string, role: SharedFundRole): Promise<void>;
   unshareFund(fundId: string): Promise<void>;
   deleteSharedFund(fundId: string): Promise<void>;
-  replaceLedger(ledger: FinanceStore, persist?: boolean): void;
+  replaceLedger(ledger: FinanceStore, persist?: boolean): Promise<void>;
   persistMarketQuotes(payload: MarketQuotesRequest): Promise<PersistedMarketQuotesResponse>;
   refreshMarket(force?: boolean): Promise<void>;
 }
@@ -329,7 +332,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     recipe: (draft: Draft<FinanceStore>) => void,
     request: (expectedRevision: number) => Promise<PersonalMutationResponse<T>>,
     options: MutationOptions<T> = {},
-  ): void => {
+  ): Promise<void> => {
     const version = ++writeVersion;
     const mutationVersion = ++queuedMutationVersion;
     const epoch = mutationEpoch;
@@ -363,6 +366,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           state.saveState = "saved";
           state.saveMessage = "Đã lưu thay đổi.";
         });
+        if (options.notifySuccess !== false) pushToast("success", "Đã lưu thay đổi.");
       }
     }).catch((error: unknown) => {
       if (error instanceof CancelledMutationError) return;
@@ -380,6 +384,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       });
       if (get().auth === "authenticated") void reloadAfterConflict();
     });
+    return operation.then(() => undefined);
   };
 
   const currentExpenseView = (): ExpenseTransactionView => {
@@ -414,7 +419,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     recipe: (draft: Draft<FinanceStore>) => void,
     request: (view: ExpenseTransactionView, expectedRevision: number) => Promise<PersonalMutationResponse<TransactionMutationResult>>,
     updateCurrentPage?: (page: Draft<TransactionPageResponse>) => void,
-  ): void => {
+  ): Promise<void> => {
     const expenseView = currentExpenseView();
     if (updateCurrentPage) {
       set((state) => {
@@ -423,7 +428,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
         }
       });
     }
-    persist(recipe, (expectedRevision) => request(expenseView, expectedRevision), {
+    return persist(recipe, (expectedRevision) => request(expenseView, expectedRevision), {
       refresh: "none",
       reconcile: (state, snapshot) => applyTransactionSnapshot(state, expenseView, snapshot),
     });
@@ -484,6 +489,13 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           state.selectedMonth = period.month;
           state.periodReady = true;
           state.statisticsScope = { mode: "year", year: period.year };
+          // Each route fetches its own snapshot after bootstrap. Mark those
+          // resources as loading before the route is shown so an initial render
+          // never presents placeholder zero values as actual financial data.
+          state.expensesState = "loading";
+          state.fundsState = "loading";
+          state.statisticsState = "loading";
+          state.debtsState = "loading";
           state.saveState = "saved";
           state.saveMessage = "Đã tải dữ liệu.";
         });
@@ -737,15 +749,15 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     },
 
     mutateLedger(recipe, request, options) {
-      persist(recipe, request, options);
+      return persist(recipe, request, options);
     },
 
-    mutateExpenseConfig(recipe, request) {
-      persist(recipe, request, { invalidateExpenseConfig: true });
+    mutateExpenseConfig(recipe, request, options) {
+      return persist(recipe, request, { invalidateExpenseConfig: true, ...options });
     },
 
     createTransaction(transaction) {
-      persistTransaction((draft) => {
+      return persistTransaction((draft) => {
         draft.expense.txns.push(transaction);
       }, (expenseView, expectedRevision) => api.createTransaction(transaction, expenseView, expectedRevision));
     },
@@ -776,11 +788,14 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
         state.saveState = "saved";
         state.saveMessage = response.alreadyApplied ? "Nhóm thao tác đã được ghi trước đó." : "Đã lưu từ trợ lý.";
       });
-      if (transactionResults.length && location.pathname === "/expenses") {
+      if (location.pathname === "/statistics") {
+        await get().loadStatistics();
+      } else if (transactionResults.length && location.pathname === "/expenses") {
         await get().loadExpenses(transactionQueryBefore ?? {});
       } else if (fundResults.length && location.pathname === "/funds") {
         await get().loadFunds(true);
       }
+      pushToast("success", response.alreadyApplied ? "Nhóm thao tác đã được đồng bộ." : "Đã lưu thao tác từ trợ lý.");
     },
 
     async reloadAfterAssistantConflict() {
@@ -788,7 +803,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     },
 
     updateTransaction(transaction) {
-      persistTransaction((draft) => {
+      return persistTransaction((draft) => {
         const index = draft.expense.txns.findIndex((item) => item.id === transaction.id);
         if (index >= 0) draft.expense.txns[index] = transaction;
       }, (expenseView, expectedRevision) => api.updateTransaction(transaction.id, transaction, expenseView, expectedRevision), (page) => {
@@ -798,7 +813,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
     },
 
     deleteTransaction(id) {
-      persistTransaction((draft) => {
+      return persistTransaction((draft) => {
         draft.expense.txns = draft.expense.txns.filter((item) => item.id !== id);
       }, (expenseView, expectedRevision) => api.deleteTransaction(id, expenseView, expectedRevision));
     },
@@ -831,6 +846,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
             state.saveState = "saved";
             state.saveMessage = "Đã lưu thay đổi.";
           });
+          if (options.notifySuccess !== false) pushToast("success", "Đã lưu thay đổi.");
         }
       });
       try {
@@ -862,6 +878,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           if (state.bootstrapData) state.bootstrapData.workspaceRevision = result.workspaceRevision;
         });
         await refreshWhenSettled(mutationVersion);
+        pushToast("success", "Đã cập nhật quỹ chia sẻ.");
       } catch (error) {
         pendingRouteRefresh = false;
         throw error;
@@ -883,6 +900,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       try {
         await operation;
         await refreshWhenSettled(mutationVersion);
+        pushToast("success", "Đã xóa quỹ chia sẻ.");
       } catch (error) {
         pendingRouteRefresh = false;
         throw error;
@@ -908,13 +926,14 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           if (state.bootstrapData) state.bootstrapData.workspaceRevision = result.workspaceRevision;
         });
         await refreshWhenSettled(mutationVersion);
+        pushToast("success", "Quỹ đã trở lại là quỹ cá nhân.");
       } catch (error) {
         pendingRouteRefresh = false;
         throw error;
       }
     },
 
-    replaceLedger(ledger, shouldPersist = true) {
+    async replaceLedger(ledger, shouldPersist = true) {
       if (!shouldPersist) {
         set((state) => { state.ledger = ledger; });
         return;
@@ -927,7 +946,8 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       });
       const operation = writeQueue.then(() => api.importData(payload, get().workspaceRevision));
       writeQueue = operation.then(() => undefined, () => undefined);
-      void operation.then(async (bootstrap) => {
+      try {
+        const bootstrap = await operation;
         clearPersonalCaches();
         applyBootstrap(bootstrap, true);
         await refreshCurrentRoute();
@@ -935,13 +955,15 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           state.saveState = "saved";
           state.saveMessage = "Đã nhập dữ liệu.";
         });
-      }).catch(async () => {
+        pushToast("success", "Đã nhập dữ liệu.");
+      } catch (error) {
         set((state) => {
           state.saveState = "error";
           state.saveMessage = "Không nhập được dữ liệu.";
         });
         await reloadAfterConflict();
-      });
+        throw error;
+      }
     },
 
     async persistMarketQuotes(payload) {
@@ -958,6 +980,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           mergeMarketResponse(state.ledger, result.quotes);
         });
         await refreshWhenSettled(mutationVersion);
+        pushToast("success", "Đã cập nhật giá thị trường.");
         return result;
       } catch (error) {
         pendingRouteRefresh = false;

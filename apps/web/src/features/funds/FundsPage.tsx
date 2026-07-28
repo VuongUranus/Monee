@@ -17,8 +17,10 @@ import type {
 } from "@chi-tieu/shared";
 import { api } from "@/lib/api";
 import { DonutChart } from "@/components/Charts";
+import { AsyncButton } from "@/components/AsyncButton";
 import { Modal } from "@/components/Modal";
 import { MoneyInput } from "@/components/MoneyInput";
+import { ResourceStatus } from "@/components/ResourceStatus";
 import { Select } from "@/components/Select";
 import {
   cryptoQuote,
@@ -119,6 +121,7 @@ export function FundsPage() {
   const periodReady = useFinanceStore((state) => state.periodReady);
   const marketState = useFinanceStore((state) => state.marketState);
   const marketMessage = useFinanceStore((state) => state.marketMessage);
+  const fundsState = useFinanceStore((state) => state.fundsState);
   const updateLedger = useFinanceStore((state) => state.updateLedger);
   const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
@@ -126,6 +129,7 @@ export function FundsPage() {
   const [scope, setScope] = useState<"year" | "all">("year");
   const [managing, setManaging] = useState(false);
   const [detailFundId, setDetailFundId] = useState<string | null>(null);
+  const [detailLoadingFundId, setDetailLoadingFundId] = useState<string | null>(null);
   const [shareFundId, setShareFundId] = useState<string | null>(null);
   const [contributionFundId, setContributionFundId] = useState<string | null>(null);
   const contributionMonth = `${year}-${String(month + 1).padStart(2, "0")}`;
@@ -164,9 +168,9 @@ export function FundsPage() {
   const debt = fundOverview?.debtSummary?.liabilities ?? ledger.financialProfile.debt.balance;
   const receivables = fundOverview?.debtSummary?.receivables ?? 0;
 
-  const resetMonth = (): void => {
+  const resetMonth = async (): Promise<void> => {
     if (!window.confirm(`Xóa toàn bộ phân bổ quỹ và ghi chú của ${MONTHS_FULL[month]} / ${year}?`)) return;
-    mutateLedger((draft) => {
+    await mutateLedger((draft) => {
       const target = draft.years[String(year)]!;
       for (const fund of draft.funds.filter((item) => item.sharing?.role !== "viewer")) {
         target.funds[fund.id]![month] = 0;
@@ -182,14 +186,19 @@ export function FundsPage() {
     });
   };
 
+  if (!fundOverview && (fundsState === "loading" || fundsState === "error")) {
+    return <section className="page-view"><ResourceStatus state={fundsState} hasData={false} label="dữ liệu quỹ" onRetry={() => void loadFunds(true)} /></section>;
+  }
+
   return (
     <section className="page-view">
+      <ResourceStatus state={fundsState} hasData={Boolean(fundOverview)} label="dữ liệu quỹ" onRetry={() => void loadFunds(true)} />
       <div className="toolbar">
         <button className="btn sm" type="button" onClick={() => setManaging(true)}>⚙ Quản lý quỹ</button>
-        <button className="btn sm" type="button" disabled={marketState === "loading"} onClick={() => void refreshMarket(true)}>↻ Cập nhật giá</button>
+        <AsyncButton className="btn sm" disabled={marketState === "loading"} busyLabel="Đang cập nhật…" onAction={() => refreshMarket(true)}>↻ Cập nhật giá</AsyncButton>
         <span className={`market-status ${marketState === "error" ? "error" : ""}`}>{marketMessage}</span>
         <span className="spacer" />
-        <button className="btn sm danger" type="button" onClick={resetMonth}>Xóa tháng này</button>
+        <AsyncButton className="btn sm danger" busyLabel="Đang xóa…" onAction={resetMonth}>Xóa tháng này</AsyncButton>
       </div>
 
       {ledger.market.errors.length ? (
@@ -252,24 +261,27 @@ export function FundsPage() {
                                 void mutateSharedLedger(fund.id, mutate, (revision) =>
                                   api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount }), {
                                   refresh: "none",
+                                  notifySuccess: false,
                                   reconcile: (state, result) => reconcileFundMonth(state, result, false),
                                 })
                                   .catch(() => undefined);
                               } else {
                                 mutateLedger(mutate, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount }, expectedRevision), {
                                   refresh: "none",
+                                  notifySuccess: false,
                                   reconcile: (state, result) => reconcileFundMonth(state, result, false),
                                 });
                               }
                             }}
                           />
                         ) : category === "saving" ? <strong>{fmt(value)}</strong> : (
-                          <button className="computed-button" type="button" onClick={() => {
+                          <button className="computed-button" type="button" disabled={detailLoadingFundId === fund.id} onClick={() => {
+                            setDetailLoadingFundId(fund.id);
                             void loadFundDetail(fund.id).then((detail) => {
                               if (detail) setDetailFundId(fund.id);
-                            });
+                            }).finally(() => setDetailLoadingFundId(null));
                           }}>
-                            <strong>{fmt(value)}</strong><small>Chỉnh chi tiết</small>
+                            <strong>{fmt(value)}</strong><small>{detailLoadingFundId === fund.id ? "Đang tải…" : "Chỉnh chi tiết"}</small>
                           </button>
                         )}
                       </td>
@@ -297,6 +309,7 @@ export function FundsPage() {
                 (expectedRevision) => api.updateMonthNote(year, month + 1, useFinanceStore.getState().ledger.years[String(year)]!.notes[month] ?? "", expectedRevision),
                 {
                   refresh: "none",
+                  notifySuccess: false,
                   reconcile: (state, result) => {
                     if (state.fundOverview?.year === result.year && state.fundOverview.month === result.month) {
                       state.fundOverview.note = result.note;
@@ -345,6 +358,7 @@ export function FundsPage() {
               const showGoals = event.target.checked;
               mutateLedger((draft) => { draft.showGoals = showGoals; }, (expectedRevision) => api.updatePreferences(expectedRevision, { showGoals }), {
                 refresh: "none",
+                notifySuccess: false,
                 reconcile: (state, result) => {
                   if (state.fundOverview) state.fundOverview.showGoals = result.showGoals;
                 },
@@ -397,11 +411,12 @@ function GoalsTable() {
     };
     if (fund.sharing) {
       void mutateSharedLedger(fund.id, recipe, (revision) =>
-        api.updateSharedFundGoal(fund.id, revision, goalYear, value), { refresh: "none", reconcile })
+        api.updateSharedFundGoal(fund.id, revision, goalYear, value), { refresh: "none", notifySuccess: false, reconcile })
         .catch(() => undefined);
     } else {
       mutateLedger(recipe, (expectedRevision) => api.updateFundGoal(fund.id, goalYear, value, expectedRevision), {
         refresh: "none",
+        notifySuccess: false,
         reconcile,
       });
     }
@@ -480,10 +495,10 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
   const [color, setColor] = useState(PALETTE[0]!);
   const [category, setCategory] = useState<FundCategory>("saving");
 
-  const add = (): void => {
+  const add = async (): Promise<void> => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    mutateLedger((draft) => {
+    await mutateLedger((draft) => {
       let id = slugId(trimmed);
       let suffix = 2;
       while (draft.funds.some((fund) => fund.id === id)) id = `${slugId(trimmed)}-${suffix++}`;
@@ -509,7 +524,7 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
       }
       return;
     }
-    mutateLedger((draft) => {
+    await mutateLedger((draft) => {
       draft.funds = draft.funds.filter((item) => item.id !== fund.id);
       for (const data of Object.values(draft.years)) {
         delete data.funds[fund.id];
@@ -556,12 +571,14 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
     if (fund.sharing) {
       void mutateSharedLedger(fund.id, recipe, (revision) => api.updateSharedFund(fund.id, revision, patch), {
         refresh: "none",
+        notifySuccess: false,
         reconcile,
       })
         .catch(() => undefined);
     } else {
       mutateLedger(recipe, (expectedRevision) => api.updateFund(fund.id, patch, expectedRevision), {
         refresh: "none",
+        notifySuccess: false,
         reconcile,
       });
     }
@@ -592,7 +609,7 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
             />
             <small>{fund.sharing ? (fund.sharing.role === "owner" ? "Đang chia sẻ" : `Chia sẻ bởi ${fund.sharing.ownerName}`) : "Cá nhân"}</small>
             {(!fund.sharing || fund.sharing.role === "owner") ? <button className="btn sm" type="button" onClick={() => onShare(fund.id)}>{fund.sharing ? "Thành viên" : "Chia sẻ"}</button> : null}
-            <button className="btn sm danger" type="button" disabled={ledger.funds.length <= 1 || (fund.sharing?.role !== undefined && fund.sharing.role !== "owner")} onClick={() => void remove(fund)}>Xóa</button>
+            <AsyncButton className="btn sm danger" disabled={ledger.funds.length <= 1 || (fund.sharing?.role !== undefined && fund.sharing.role !== "owner")} busyLabel="Đang xóa…" onAction={() => remove(fund)}>Xóa</AsyncButton>
           </div>
         ))}
       </div>
@@ -605,7 +622,7 @@ function FundManager({ onClose, onShare }: { onClose(): void; onShare(fundId: st
           onValueChange={setCategory}
           ariaLabel="Loại quỹ mới"
         />
-        <button className="btn primary" type="button" onClick={add}>+ Thêm</button>
+        <AsyncButton className="btn primary" busyLabel="Đang thêm…" onAction={add}>+ Thêm</AsyncButton>
       </div>
     </Modal>
   );
@@ -623,14 +640,18 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
   const [role, setRole] = useState<SharedFundRole>("viewer");
   const [message, setMessage] = useState("");
   const [members, setMembers] = useState<SharedFundMembersResponse["members"]>([]);
+  const [membersLoading, setMembersLoading] = useState(Boolean(shared));
 
   const refreshMembers = useCallback(async (): Promise<void> => {
     if (!shared) return;
+    setMembersLoading(true);
     try {
       const response = await api.loadSharedFundMembers(fundId);
       setMembers(response.members);
     } catch {
       setMessage("Không tải được danh sách thành viên.");
+    } finally {
+      setMembersLoading(false);
     }
   }, [fundId, shared]);
 
@@ -680,19 +701,19 @@ function ShareFundModal({ fundId, onClose }: { fundId: string; onClose(): void }
   };
 
   return (
-    <Modal title={`Chia sẻ quỹ — ${fund.name}`} onClose={onClose} footer={<><button className="btn" type="button" onClick={onClose}>Đóng</button>{shared && members.length === 0 ? <button className="btn danger" type="button" onClick={() => void stopSharing()}>Ngừng chia sẻ</button> : null}</>}>
+    <Modal title={`Chia sẻ quỹ — ${fund.name}`} onClose={onClose} footer={<><button className="btn" type="button" onClick={onClose}>Đóng</button>{shared && members.length === 0 ? <AsyncButton className="btn danger" busyLabel="Đang chuyển…" onAction={stopSharing}>Ngừng chia sẻ</AsyncButton> : null}</>}>
       <p className="hint">Chỉ mời được email Google đã từng đăng nhập ứng dụng. Thành viên xem được toàn bộ dữ liệu của quỹ, không xem thu chi cá nhân.</p>
       <div className="manager-add">
         <input type="email" value={email} placeholder="email@example.com" aria-label="Email thành viên" onChange={(event) => setEmail(event.target.value)} />
         <Select<SharedFundRole> value={role} options={[{ value: "viewer", label: "Chỉ xem" }, { value: "editor", label: "Chỉnh sửa" }]} onValueChange={setRole} ariaLabel="Quyền thành viên" />
-        <button className="btn primary" type="button" disabled={!email.trim()} onClick={() => void addMember()}>{shared ? "Cấp quyền" : "Bắt đầu chia sẻ"}</button>
+        <AsyncButton className="btn primary" disabled={!email.trim()} busyLabel="Đang cập nhật…" onAction={addMember}>{shared ? "Cấp quyền" : "Bắt đầu chia sẻ"}</AsyncButton>
       </div>
       {message ? <p className="hint">{message}</p> : null}
-      {members.length ? <div className="manager-list">
+      {membersLoading ? <div className="resource-status inline" role="status"><span className="loading-spinner" aria-hidden="true" />Đang tải thành viên…</div> : members.length ? <div className="manager-list">
         {members.map((member) => <div className="manager-row" key={member.user.sub}>
           <span>{member.user.name || member.user.email}<small>{member.user.email}</small></span>
           <span>{member.role === "editor" ? "Chỉnh sửa" : "Chỉ xem"}</span>
-          <button className="btn sm danger" type="button" onClick={() => void removeMember(member.user.sub)}>Thu hồi</button>
+          <AsyncButton className="btn sm danger" busyLabel="Đang thu hồi…" onAction={() => removeMember(member.user.sub)}>Thu hồi</AsyncButton>
         </div>)}
       </div> : shared ? <p className="hint">Chưa có thành viên nào.</p> : null}
     </Modal>
@@ -710,15 +731,19 @@ function ContributionModal({ fundId, month, onClose }: { fundId: string; month: 
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
   const [contributions, setContributions] = useState<SharedFundContributionsResponse | null>(null);
+  const [contributionsLoading, setContributionsLoading] = useState(true);
   const entries = contributions?.items ?? [];
   const canContribute = shared.role !== "viewer";
   const [year, monthNumber] = month.split("-").map(Number) as [number, number];
 
   const refreshContributions = useCallback(async (): Promise<void> => {
+    setContributionsLoading(true);
     try {
       setContributions(await api.loadSharedFundContributions(fundId, year, monthNumber));
     } catch {
       setMessage("Không tải được các khoản đóng góp.");
+    } finally {
+      setContributionsLoading(false);
     }
   }, [fundId, monthNumber, year]);
 
@@ -755,11 +780,11 @@ function ContributionModal({ fundId, month, onClose }: { fundId: string; month: 
 
   return <Modal title={`Thành viên gửi vào ${fund.name} — ${month}`} onClose={onClose} footer={<button className="btn" type="button" onClick={onClose}>Đóng</button>}>
     <p className="hint">Tổng thành viên gửi: <b>{fmt(entries.reduce((sum, entry) => sum + entry.amount, 0))}</b></p>
-    {entries.length ? <div className="manager-list">{entries.map((entry) => {
+    {contributionsLoading ? <div className="resource-status inline" role="status"><span className="loading-spinner" aria-hidden="true" />Đang tải khoản đóng góp…</div> : entries.length ? <div className="manager-list">{entries.map((entry) => {
       const profile = contributions?.contributors[entry.memberId];
       return <div className="manager-row" key={entry.id}><span>{profile?.name || profile?.email || "Thành viên"}{entry.memberId === user?.sub ? " (bạn)" : ""}<small>{new Date(entry.createdAt).toLocaleString("vi-VN")}{entry.note ? ` · ${entry.note}` : ""}</small></span><strong>{fmt(entry.amount)}</strong></div>;
     })}</div> : <p className="hint">Chưa có khoản gửi nào trong tháng này.</p>}
-    {canContribute ? <div className="manager-add"><MoneyInput value={amount} allowZero={false} ariaLabel="Số tiền gửi vào quỹ" onCommit={setAmount} /><input value={note} placeholder="Ghi chú (không bắt buộc)" aria-label="Ghi chú khoản gửi" onChange={(event) => setNote(event.target.value)} /><button className="btn primary" type="button" disabled={!amount} onClick={() => void add()}>+ Ghi nhận tiền gửi</button></div> : <p className="hint">Bạn có quyền xem nên không thể ghi nhận khoản gửi.</p>}
+    {canContribute ? <div className="manager-add"><MoneyInput value={amount} allowZero={false} ariaLabel="Số tiền gửi vào quỹ" onCommit={setAmount} /><input value={note} placeholder="Ghi chú (không bắt buộc)" aria-label="Ghi chú khoản gửi" onChange={(event) => setNote(event.target.value)} /><AsyncButton className="btn primary" disabled={!amount} busyLabel="Đang ghi nhận…" onAction={add}>+ Ghi nhận tiền gửi</AsyncButton></div> : <p className="hint">Bạn có quyền xem nên không thể ghi nhận khoản gửi.</p>}
     {message ? <p className="hint">{message}</p> : null}
   </Modal>;
 }
@@ -794,7 +819,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   });
   const defaultGoldLot = (): GoldLot => ({ chi: 0, manualPrice: null, purchasePrice: null, feeVnd: null });
 
-  const save = (): void => {
+  const save = async (): Promise<void> => {
     let savedAmount = 0;
     let savedDetail: FundDetail = null;
     const recipe = (draft: any): void => {
@@ -823,14 +848,13 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
       return;
     }
     if (fund.sharing) {
-      void mutateSharedLedger(fund.id, recipe, (revision) =>
+      await mutateSharedLedger(fund.id, recipe, (revision) =>
         api.updateSharedFundMonth(fund.id, year, month + 1, revision, { amount: savedAmount, detail: savedDetail }), {
         refresh: "none",
         reconcile: (state, result) => reconcileFundMonth(state, result, true),
-      })
-        .catch(() => undefined);
+      });
     } else {
-      mutateLedger(recipe, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount: savedAmount, detail: savedDetail }, expectedRevision), {
+      await mutateLedger(recipe, (expectedRevision) => api.updateFundMonth(fund.id, year, month + 1, { amount: savedAmount, detail: savedDetail }, expectedRevision), {
         refresh: "none",
         reconcile: (state, result) => reconcileFundMonth(state, result, true),
       });
@@ -905,7 +929,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   };
 
   return (
-    <Modal title={`${fund.name} — ${MONTHS_FULL[month]} / ${year}`} onClose={onClose} wide footer={<><button className="btn" type="button" onClick={onClose}>Đóng</button>{!readOnly ? <button className="btn primary" type="button" onClick={save}>Lưu</button> : null}</>}>
+    <Modal title={`${fund.name} — ${MONTHS_FULL[month]} / ${year}`} onClose={onClose} wide footer={<><button className="btn" type="button" onClick={onClose}>Đóng</button>{!readOnly ? <AsyncButton className="btn primary" busyLabel="Đang lưu…" onAction={save}>Lưu</AsyncButton> : null}</>}>
       <fieldset disabled={readOnly} className={`asset-editor asset-editor-${category}`}>
         <div className="asset-editor-intro">
           <span className="asset-kind">{category === "gold" ? "Vàng" : category === "stock" ? "Cổ phiếu" : "Crypto"}</span>

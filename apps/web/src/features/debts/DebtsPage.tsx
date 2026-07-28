@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DebtDetailResponse, DebtKind, DebtOverviewItem } from "@chi-tieu/shared";
 import { DateField } from "@/components/DateField";
+import { AsyncButton } from "@/components/AsyncButton";
 import { Modal } from "@/components/Modal";
 import { MoneyInput } from "@/components/MoneyInput";
+import { ResourceStatus } from "@/components/ResourceStatus";
 import { Select } from "@/components/Select";
 import { api } from "@/lib/api";
 import { fmt } from "@/lib/domain";
@@ -24,17 +26,21 @@ export function DebtsPage() {
   const loadDebts = useFinanceStore((state) => state.loadDebts);
   const loadDebtDetail = useFinanceStore((state) => state.loadDebtDetail);
   const loadFunds = useFinanceStore((state) => state.loadFunds);
+  const debtsState = useFinanceStore((state) => state.debtsState);
   const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const [filter, setFilter] = useState<"all" | DebtKind>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "overdue" | "dueSoon" | "settled">("all");
   const [dueDate, setDueDate] = useState("");
   const [editing, setEditing] = useState<DebtFormDebt | null | "new">(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => { void loadDebts(); }, [loadDebts]);
   useEffect(() => { void loadFunds(); }, [loadFunds]);
   useEffect(() => {
-    if (selectedId) void loadDebtDetail(selectedId);
+    if (!selectedId) return;
+    setDetailLoading(true);
+    void loadDebtDetail(selectedId).finally(() => setDetailLoading(false));
   }, [loadDebtDetail, overview, selectedId]);
 
   const items = useMemo(() => (overview?.items ?? []).filter((item) => {
@@ -49,8 +55,13 @@ export function DebtsPage() {
   const assets = (fundOverview?.funds ?? []).reduce((total, fund) => total + fund.allTimeTotal + fund.openingBalance, 0);
   const netWorth = assets + summary.receivables - summary.liabilities;
 
+  if (!overview && (debtsState === "loading" || debtsState === "error")) {
+    return <section className="page-view"><ResourceStatus state={debtsState} hasData={false} label="dữ liệu vay và nợ" onRetry={() => void loadDebts()} /></section>;
+  }
+
   return (
     <section className="page-view debts-page">
+      <ResourceStatus state={debtsState} hasData={Boolean(overview)} label="dữ liệu vay và nợ" onRetry={() => void loadDebts()} />
       <div className="toolbar">
         <button className="btn primary" type="button" onClick={() => setEditing("new")}>+ Thêm khoản vay/nợ</button>
         <Select<"all" | DebtKind>
@@ -107,13 +118,14 @@ export function DebtsPage() {
         </article>
 
         <article className="card section-card debt-detail">
-          {!selected ? <div className="empty-state">Chọn một khoản để xem lịch thanh toán.</div> : <>
+          {detailLoading ? <div className="resource-status empty" role="status"><span className="loading-spinner" aria-hidden="true" />Đang tải chi tiết khoản vay/nợ…</div> : !selected ? <div className="empty-state">Chọn một khoản để xem lịch thanh toán.</div> : <>
             <div className="debt-detail-head">
               <div><span className={`debt-kind ${selected.kind}`}>{TYPE_LABEL[selected.kind]}</span><h2>{selected.name}</h2><p className="hint">{selected.counterparty || "Chưa ghi đối tác"}</p></div>
-              <div className="debt-detail-actions"><button className="btn sm" type="button" onClick={() => setEditing(selected)}>Sửa</button><button className="btn sm danger" type="button" onClick={() => {
-                if (window.confirm(`Xóa ${selected.name} và lịch sử giao dịch liên quan?`)) mutateLedger(() => undefined, (revision) => api.deleteDebt(selected.id, revision));
+              <div className="debt-detail-actions"><button className="btn sm" type="button" onClick={() => setEditing(selected)}>Sửa</button><AsyncButton className="btn sm danger" busyLabel="Đang xóa…" onAction={async () => {
+                if (!window.confirm(`Xóa ${selected.name} và lịch sử giao dịch liên quan?`)) return;
+                await mutateLedger(() => undefined, (revision) => api.deleteDebt(selected.id, revision));
                 setSelectedId(null);
-              }}>Xóa</button></div>
+              }}>Xóa</AsyncButton></div>
             </div>
             <div className="debt-numbers">
               <div><span>Dư nợ còn lại</span><b>{fmt(selected.remainingBalance)}</b></div>
@@ -126,10 +138,11 @@ export function DebtsPage() {
               {selected.schedule.map((item) => <div className={`schedule-row ${item.payment ? "paid" : ""}`} key={item.installment}>
                 <div><b>Kỳ {item.installment}</b><span>{item.dueDate}</span></div>
                 <div><b>{fmt(item.amount)}</b><span>Gốc {fmt(item.principalAmount)} · Lãi {fmt(item.interestAmount)}</span></div>
-                {item.payment ? <div><span>Đã {selected.kind === "lent" ? "thu" : "trả"} {item.payment.paidAt}</span><button className="btn sm danger" type="button" onClick={() => {
-                  if (window.confirm("Hoàn tác kỳ thanh toán gần nhất?")) mutateLedger(() => undefined, (revision) => api.deleteDebtPayment(selected.id, item.payment!.id, revision));
-                }}>Hoàn tác</button></div>
-                  : item.installment === selected.nextPayment?.installment ? <button className="btn sm primary" type="button" onClick={() => mutateLedger(() => undefined, (revision) => api.recordDebtPayment(selected.id, new Date().toISOString().slice(0, 10), "", revision))}>{selected.kind === "lent" ? "Xác nhận đã thu" : "Xác nhận đã trả"}</button>
+                {item.payment ? <div><span>Đã {selected.kind === "lent" ? "thu" : "trả"} {item.payment.paidAt}</span><AsyncButton className="btn sm danger" busyLabel="Đang hoàn tác…" onAction={() => {
+                  if (!window.confirm("Hoàn tác kỳ thanh toán gần nhất?")) return;
+                  return mutateLedger(() => undefined, (revision) => api.deleteDebtPayment(selected.id, item.payment!.id, revision));
+                }}>Hoàn tác</AsyncButton></div>
+                  : item.installment === selected.nextPayment?.installment ? <AsyncButton className="btn sm primary" busyLabel="Đang ghi nhận…" onAction={() => mutateLedger(() => undefined, (revision) => api.recordDebtPayment(selected.id, new Date().toISOString().slice(0, 10), "", revision))}>{selected.kind === "lent" ? "Xác nhận đã thu" : "Xác nhận đã trả"}</AsyncButton>
                     : <span />}
               </div>)}
             </div>
@@ -164,17 +177,18 @@ function DebtForm({ debt, onClose }: { debt?: DebtFormDebt; onClose(): void }) {
   const categories = kind === "lent" ? ledger.expense.incomeCats : ledger.expense.cats;
   const locked = Boolean(debt && "payments" in debt && debt.payments.length);
   const valid = name.trim() && principal > 0 && paymentAmount > 0 && termMonths > 0 && firstPaymentDate && categoryId && paymentAmount * termMonths >= principal;
-
-  return <Modal title={debt ? "Sửa khoản vay/nợ" : "Thêm khoản vay/nợ"} onClose={onClose} wide footer={<><button className="btn" type="button" onClick={onClose}>Hủy</button><button className="btn primary" type="button" disabled={!valid} onClick={() => {
+  const save = async (): Promise<void> => {
     const common = { name: name.trim(), counterparty: counterparty.trim(), paymentCategoryId: categoryId, note: note.trim() };
-    if (debt && locked) mutateLedger(() => undefined, (revision) => api.updateDebt(debt.id, { ...common, paymentAccountId: accountId || "" }, revision));
+    if (debt && locked) await mutateLedger(() => undefined, (revision) => api.updateDebt(debt.id, { ...common, paymentAccountId: accountId || "" }, revision));
     else {
       const payload = { kind, ...common, principal, annualInterestRate: rate, termMonths, paymentAmount, firstPaymentDate };
-      if (debt) mutateLedger(() => undefined, (revision) => api.updateDebt(debt.id, { ...payload, paymentAccountId: accountId || "" }, revision));
-      else mutateLedger(() => undefined, (revision) => api.createDebt({ ...payload, ...(accountId ? { paymentAccountId: accountId } : {}) }, revision));
+      if (debt) await mutateLedger(() => undefined, (revision) => api.updateDebt(debt.id, { ...payload, paymentAccountId: accountId || "" }, revision));
+      else await mutateLedger(() => undefined, (revision) => api.createDebt({ ...payload, ...(accountId ? { paymentAccountId: accountId } : {}) }, revision));
     }
     onClose();
-  }}>{debt ? "Lưu thay đổi" : "Tạo khoản"}</button></>}>
+  };
+
+  return <Modal title={debt ? "Sửa khoản vay/nợ" : "Thêm khoản vay/nợ"} onClose={onClose} wide footer={<><button className="btn" type="button" onClick={onClose}>Hủy</button><AsyncButton className="btn primary" disabled={!valid} busyLabel="Đang lưu…" onAction={save}>{debt ? "Lưu thay đổi" : "Tạo khoản"}</AsyncButton></>}>
     {locked ? <div className="warn-box"><span>⚠</span><div>Đã có kỳ thanh toán; các trường lịch trả được khóa. Hoàn tác kỳ gần nhất trước khi sửa lịch.</div></div> : null}
     <div className="entry-form debt-form">
       <label>Loại<Select value={kind} options={TYPES} onValueChange={(value) => { setKind(value); setCategoryId(""); }} ariaLabel="Loại khoản" /></label>

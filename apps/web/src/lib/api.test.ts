@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
+import { getApiActivities } from "./api-feedback";
 
 describe("API read requests", () => {
   afterEach(() => {
@@ -43,5 +44,19 @@ describe("API read requests", () => {
 
     await expect(beforeMutation).resolves.toEqual({ amount: 2_500_000 });
     await expect(afterMutation).resolves.toEqual({ amount: 5_500_000 });
+  });
+
+  it("theo dõi đúng một activity cho GET được gộp và dọn sau khi hoàn tất", async () => {
+    let resolveResponse: ((response: Response) => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { resolveResponse = resolve; })));
+
+    const first = api.loadData();
+    const second = api.loadData();
+    expect(getApiActivities()).toHaveLength(1);
+    expect(getApiActivities()[0]).toMatchObject({ kind: "read", scope: "workspace" });
+
+    resolveResponse?.(new Response(JSON.stringify({ workspaceRevision: 3 }), { status: 200 }));
+    await Promise.all([first, second]);
+    expect(getApiActivities()).toHaveLength(0);
   });
 });

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Account, FinanceCategory, Transaction, TransactionQuery, TransactionType } from "@chi-tieu/shared";
 import { AccountExpenseChart } from "@/components/AccountExpenseChart";
+import { AsyncButton } from "@/components/AsyncButton";
 import { DonutChart } from "@/components/Charts";
 import { DateField } from "@/components/DateField";
 import { Modal } from "@/components/Modal";
 import { MoneyInput } from "@/components/MoneyInput";
+import { ResourceStatus } from "@/components/ResourceStatus";
 import { Select } from "@/components/Select";
 import { api } from "@/lib/api";
 import {
@@ -53,6 +55,7 @@ export function ExpensesPage() {
   const transactionQuery = useFinanceStore((state) => state.transactionQuery);
   const loadExpenses = useFinanceStore((state) => state.loadExpenses);
   const loadTransactions = useFinanceStore((state) => state.loadTransactions);
+  const expensesState = useFinanceStore((state) => state.expensesState);
   const createTransaction = useFinanceStore((state) => state.createTransaction);
   const deleteTransaction = useFinanceStore((state) => state.deleteTransaction);
   const [managing, setManaging] = useState(false);
@@ -158,7 +161,7 @@ export function ExpensesPage() {
   const historyStart = historyTotal ? (currentHistoryPage - 1) * HISTORY_PAGE_SIZE + 1 : 0;
   const historyEnd = Math.min(currentHistoryPage * HISTORY_PAGE_SIZE, historyTotal);
 
-  const addTransaction = (): void => {
+  const addTransaction = async (): Promise<void> => {
     if (!(amount > 0) || !date || !selectedCategory) return;
     const transaction = {
       id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
@@ -169,15 +172,21 @@ export function ExpensesPage() {
       amount,
       note: note.trim(),
     };
-    createTransaction(transaction);
+    await createTransaction(transaction);
     setAmount(0);
     setNote("");
   };
 
   const filterCategories = filters.type ? categoriesForType(ledger, filters.type) : [...ledger.expense.cats, ...ledger.expense.incomeCats];
+  const hasExpenseData = Boolean(expenseSummary && transactionPage);
+
+  if (!hasExpenseData && (expensesState === "loading" || expensesState === "error")) {
+    return <section className="page-view"><ResourceStatus state={expensesState} hasData={false} label="dữ liệu chi tiêu" onRetry={() => void loadExpenses()} /></section>;
+  }
 
   return (
     <section className="page-view">
+      <ResourceStatus state={expensesState} hasData={hasExpenseData} label="dữ liệu chi tiêu" onRetry={() => void loadExpenses()} />
       <div className="toolbar">
         <button className="btn sm" type="button" onClick={() => setManaging(true)}>⚙ Quản lý danh mục</button>
         <button className="btn sm" type="button" onClick={() => setManagingAccounts(true)}>◫ Quản lý tài khoản</button>
@@ -231,7 +240,7 @@ export function ExpensesPage() {
             </div>
             <label>Số tiền<MoneyInput value={amount} allowZero={false} onCommit={setAmount} onValueChange={setAmount} placeholder="vd: 150000" /></label>
             <label>Ghi chú<input value={note} placeholder="vd: ăn trưa, đổ xăng…" onChange={(event) => setNote(event.target.value)} /></label>
-            <button className="btn primary full-width" type="button" disabled={!amount || !date || !selectedCategory} onClick={addTransaction}>+ Thêm khoản</button>
+            <AsyncButton className="btn primary full-width" disabled={!amount || !date || !selectedCategory} busyLabel="Đang thêm…" onAction={addTransaction}>+ Thêm khoản</AsyncButton>
         </div>
       </article>
 
@@ -344,7 +353,7 @@ export function ExpensesPage() {
                     <td>{transaction.accountId ? accountForTransaction(ledger, transaction)?.name ?? "(đã xóa)" : "Chưa xác định"}</td>
                     <td>{transaction.note}</td>
                     <td className={`amt-${transaction.type}`}>{transaction.type === "income" ? "+" : "−"}{fmt(transaction.amount)}</td>
-                    <td><button className="tx-edit" type="button" aria-label="Sửa giao dịch" onClick={() => setEditingId(transaction.id)}>✎</button><button className="tx-del" type="button" aria-label="Xóa giao dịch" onClick={() => deleteTransaction(transaction.id)}>×</button></td>
+                    <td><button className="tx-edit" type="button" aria-label="Sửa giao dịch" onClick={() => setEditingId(transaction.id)}>✎</button><AsyncButton className="tx-del" aria-label="Xóa giao dịch" busyLabel="Đang xóa…" onAction={() => deleteTransaction(transaction.id)}>×</AsyncButton></td>
                   </tr>
                 ))}
             </tbody>
@@ -434,11 +443,15 @@ function EditTransactionRow({ transaction, onDone }: { transaction: Transaction;
       </td>
       <td><input aria-label="Ghi chú đang sửa" value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></td>
       <td><MoneyInput value={draft.amount} allowZero={false} onCommit={(amount) => setDraft({ ...draft, amount })} onValueChange={(amount) => setDraft((current) => ({ ...current, amount }))} /></td>
-      <td><button className="tx-save" type="button" aria-label="Lưu giao dịch" onClick={() => {
+      <td><AsyncButton className="tx-save" aria-label="Lưu giao dịch" busyLabel="Đang lưu…" onAction={async () => {
         if (!(draft.amount > 0)) return;
-        updateTransaction(draft);
+        // Keep the existing optimistic row behaviour: the editor closes as
+        // soon as the update enters the write queue, while the button guards
+        // the request that initiated it against a second click.
+        const operation = updateTransaction(draft);
         onDone();
-      }}>✓</button><button className="tx-cancel" type="button" aria-label="Hủy chỉnh sửa" onClick={onDone}>×</button></td>
+        await operation;
+      }}>✓</AsyncButton><button className="tx-cancel" type="button" aria-label="Hủy chỉnh sửa" onClick={onDone}>×</button></td>
     </tr>
   );
 }
@@ -452,9 +465,9 @@ function CategoryManager({ onClose }: { onClose(): void }) {
   const [color, setColor] = useState(PALETTE[0]!);
   const categories = categoriesForType(ledger, tab);
 
-  const add = (): void => {
+  const add = async (): Promise<void> => {
     if (!name.trim()) return;
-    mutateExpenseConfig((draft) => {
+    await mutateExpenseConfig((draft) => {
       const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
       let id = slugId(name);
       let suffix = 2;
@@ -491,30 +504,30 @@ function CategoryManager({ onClose }: { onClose(): void }) {
               mutateExpenseConfig((draft) => {
                 const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
                 target[index]!.color = nextColor;
-              }, (expectedRevision) => api.updateCategory(tab, item.id, { color: nextColor }, expectedRevision));
+              }, (expectedRevision) => api.updateCategory(tab, item.id, { color: nextColor }, expectedRevision), { notifySuccess: false });
             }} />
             <input value={item.name} onChange={(event) => updateLedger((draft) => {
               const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
               target[index]!.name = event.target.value;
             })} onBlur={(event) => {
               const nextName = event.currentTarget.value.trim();
-              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateCategory(tab, item.id, { name: nextName }, expectedRevision));
+              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateCategory(tab, item.id, { name: nextName }, expectedRevision), { notifySuccess: false });
             }} />
             {tab === "expense" ? <MoneyInput value={item.budget ?? 0} onCommit={(budget) => mutateExpenseConfig((draft) => {
               draft.expense.cats[index]!.budget = budget;
               draft.financialProfile.monthlyBudgets[item.id] = budget;
-            }, (expectedRevision) => api.updateCategory(tab, item.id, { budget }, expectedRevision))} /> : <span />}
-            <button className="btn sm danger" type="button" disabled={categories.length <= 1} onClick={() => mutateExpenseConfig((draft) => {
+            }, (expectedRevision) => api.updateCategory(tab, item.id, { budget }, expectedRevision), { notifySuccess: false })} /> : <span />}
+            <AsyncButton className="btn sm danger" disabled={categories.length <= 1} busyLabel="Đang xóa…" onAction={() => mutateExpenseConfig((draft) => {
               const target = tab === "income" ? draft.expense.incomeCats : draft.expense.cats;
               target.splice(index, 1);
-            }, (expectedRevision) => api.deleteCategory(tab, item.id, expectedRevision))}>Xóa</button>
+            }, (expectedRevision) => api.deleteCategory(tab, item.id, expectedRevision))}>Xóa</AsyncButton>
           </div>
         ))}
       </div>
       <div className="manager-add">
         <input type="color" value={color} aria-label="Màu danh mục mới" onChange={(event) => setColor(event.target.value)} />
         <input value={name} placeholder="Tên danh mục mới" onChange={(event) => setName(event.target.value)} />
-        <button className="btn primary" type="button" onClick={add}>+ Thêm</button>
+        <AsyncButton className="btn primary" busyLabel="Đang thêm…" onAction={add}>+ Thêm</AsyncButton>
       </div>
     </Modal>
   );
@@ -539,9 +552,9 @@ function AccountManager({ onClose }: { onClose(): void }) {
     return id;
   };
 
-  const add = (): void => {
+  const add = async (): Promise<void> => {
     if (!name.trim()) return;
-    mutateExpenseConfig((draft) => {
+    await mutateExpenseConfig((draft) => {
       if (isAccounts) {
         draft.expense.accounts.push({
           id: uniqueId(name, draft.expense.accounts.map((item) => item.id)),
@@ -590,7 +603,7 @@ function AccountManager({ onClose }: { onClose(): void }) {
               draft.expense.accounts[index]!.name = event.target.value;
             })} onBlur={(event) => {
               const nextName = event.currentTarget.value.trim();
-              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateAccount(account.id, { name: nextName }, expectedRevision));
+              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateAccount(account.id, { name: nextName }, expectedRevision), { notifySuccess: false });
             }} />
             <Select
               value={account.typeId ?? ""}
@@ -599,13 +612,13 @@ function AccountManager({ onClose }: { onClose(): void }) {
                 const target = draft.expense.accounts[index]!;
                 if (nextTypeId) target.typeId = nextTypeId;
                 else delete target.typeId;
-              }, (expectedRevision) => api.updateAccount(account.id, { typeId: nextTypeId || null }, expectedRevision))}
+              }, (expectedRevision) => api.updateAccount(account.id, { typeId: nextTypeId || null }, expectedRevision), { notifySuccess: false })}
               ariaLabel={`Loại ${account.name}`}
               compact
             />
-            <button className="btn sm danger" type="button" onClick={() => mutateExpenseConfig((draft) => {
+            <AsyncButton className="btn sm danger" busyLabel="Đang xóa…" onAction={() => mutateExpenseConfig((draft) => {
               draft.expense.accounts.splice(index, 1);
-            }, (expectedRevision) => api.deleteAccount(account.id, expectedRevision))}>Xóa</button>
+            }, (expectedRevision) => api.deleteAccount(account.id, expectedRevision))}>Xóa</AsyncButton>
           </div>
         )) : ledger.expense.accountTypes.map((type, index) => (
           <div className="manager-row account-type-row" key={type.id}>
@@ -615,20 +628,20 @@ function AccountManager({ onClose }: { onClose(): void }) {
               draft.expense.accountTypes[index]!.name = event.target.value;
             })} onBlur={(event) => {
               const nextName = event.currentTarget.value.trim();
-              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateAccountType(type.id, nextName, expectedRevision));
+              if (nextName) mutateExpenseConfig(() => undefined, (expectedRevision) => api.updateAccountType(type.id, nextName, expectedRevision), { notifySuccess: false });
             }} />
             <span />
-            <button className="btn sm danger" type="button" onClick={() => mutateExpenseConfig((draft) => {
+            <AsyncButton className="btn sm danger" busyLabel="Đang xóa…" onAction={() => mutateExpenseConfig((draft) => {
               draft.expense.accountTypes.splice(index, 1);
               for (const account of draft.expense.accounts) if (account.typeId === type.id) delete account.typeId;
-            }, (expectedRevision) => api.deleteAccountType(type.id, expectedRevision))}>Xóa</button>
+            }, (expectedRevision) => api.deleteAccountType(type.id, expectedRevision))}>Xóa</AsyncButton>
           </div>
         ))}
       </div>
       <div className="manager-add">
         <input value={name} placeholder={isAccounts ? "Tên tài khoản mới" : "Tên loại tài khoản mới"} onChange={(event) => setName(event.target.value)} />
         {isAccounts ? <Select<string> value={selectedTypeId} options={typeOptions} onValueChange={setTypeId} ariaLabel="Loại tài khoản mới" compact /> : null}
-        <button className="btn primary" type="button" onClick={add}>+ Thêm</button>
+        <AsyncButton className="btn primary" busyLabel="Đang thêm…" onAction={add}>+ Thêm</AsyncButton>
       </div>
     </Modal>
   );

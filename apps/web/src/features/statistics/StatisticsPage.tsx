@@ -3,6 +3,7 @@ import type { FinanceCategory } from "@chi-tieu/shared";
 import { AccountExpenseChart } from "@/components/AccountExpenseChart";
 import { DonutChart, FinanceBarChart } from "@/components/Charts";
 import { Select } from "@/components/Select";
+import { ResourceStatus } from "@/components/ResourceStatus";
 import {
   fmt,
   MONTHS,
@@ -34,6 +35,7 @@ export function StatisticsPage() {
   const selectedYear = useFinanceStore((state) => state.selectedYear);
   const selectedMonth = useFinanceStore((state) => state.selectedMonth);
   const periodReady = useFinanceStore((state) => state.periodReady);
+  const statisticsState = useFinanceStore((state) => state.statisticsState);
   useEffect(() => {
     if (periodReady) void loadStatistics(scope);
   }, [loadStatistics, periodReady, scope]);
@@ -63,8 +65,13 @@ export function StatisticsPage() {
     else setScope({ mode, from: scope.mode === "range" ? scope.from : currentMonth, to: scope.mode === "range" ? scope.to : currentMonth });
   };
 
+  if (!statistics && (statisticsState === "loading" || statisticsState === "error")) {
+    return <section className="page-view"><ResourceStatus state={statisticsState} hasData={false} label="dữ liệu thống kê" onRetry={() => void loadStatistics(scope)} /></section>;
+  }
+
   return (
     <section className="page-view">
+      <ResourceStatus state={statisticsState} hasData={Boolean(statistics)} label="dữ liệu thống kê" onRetry={() => void loadStatistics(scope)} />
       <div className="statistics-filter">
         <label>Phạm vi
           <Select<ScopeMode>

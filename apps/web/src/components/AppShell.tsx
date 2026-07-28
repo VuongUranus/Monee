@@ -2,8 +2,11 @@ import { useEffect, useRef, useState, type PropsWithChildren } from "react";
 import { NavLink, useLocation } from "react-router";
 import { BackupModal } from "./BackupModal";
 import { AssistantWidget } from "./AssistantWidget";
+import { AsyncButton } from "./AsyncButton";
+import { ApiProgress, ToastViewport, useApiActivities } from "./ApiFeedback";
 import { Select } from "./Select";
 import { api } from "@/lib/api";
+import { pushToast } from "@/lib/api-feedback";
 import { downloadBackup, ensureYear, mergeSharedFunds, MONTHS_FULL, normalizeStore, years } from "@/lib/domain";
 import { useFinanceStore } from "@/store/finance-store";
 
@@ -40,6 +43,7 @@ export function AppShell({ children }: PropsWithChildren) {
   const setPeriod = useFinanceStore((state) => state.setPeriod);
   const replaceLedger = useFinanceStore((state) => state.replaceLedger);
   const logout = useFinanceStore((state) => state.logout);
+  const activities = useApiActivities();
   const inputRef = useRef<HTMLInputElement>(null);
   const periodPickerRef = useRef<HTMLDivElement>(null);
   const [backup, setBackup] = useState<ReturnType<typeof downloadBackup> | null>(null);
@@ -83,11 +87,10 @@ export function AppShell({ children }: PropsWithChildren) {
       const now = new Date();
       mergeSharedFunds(normalized.store, Object.values(sharedFunds));
       ensureYear(normalized.store, now.getFullYear());
-      replaceLedger(normalized.store);
+      await replaceLedger(normalized.store);
       setPeriod(now.getFullYear(), now.getMonth());
-      window.alert("Đã nhập dữ liệu thành công.");
     } catch {
-      window.alert("Tệp không hợp lệ. Hãy chọn bản sao lưu đã xuất từ ứng dụng.");
+      pushToast("error", "Tệp không hợp lệ hoặc không thể nhập dữ liệu.");
     } finally {
       if (inputRef.current) inputRef.current.value = "";
     }
@@ -97,8 +100,9 @@ export function AppShell({ children }: PropsWithChildren) {
     try {
       const payload = await api.exportBackup();
       setBackup(downloadBackup(normalizeStore(payload).store));
+      pushToast("success", "Đã chuẩn bị bản sao lưu.");
     } catch {
-      window.alert("Không thể xuất sao lưu. Hãy thử lại.");
+      pushToast("error", "Không thể xuất sao lưu. Hãy thử lại.");
     }
   };
 
@@ -120,7 +124,8 @@ export function AppShell({ children }: PropsWithChildren) {
         </div>
       </header>
 
-      <main className="container">
+      <ApiProgress />
+      <main className="container" aria-busy={activities.length > 0}>
         <section className="toolbar top-toolbar">
           {page !== "statistics" && page !== "debts" ? (
             <div className="period-main">
@@ -180,7 +185,7 @@ export function AppShell({ children }: PropsWithChildren) {
             </div>
           ) : null}
           <span className="spacer" />
-          <button className="btn sm" type="button" onClick={() => void exportBackup()}>⬇ Xuất sao lưu</button>
+          <AsyncButton className="btn sm" busyLabel="Đang xuất…" onAction={exportBackup}>⬇ Xuất sao lưu</AsyncButton>
           <button className="btn sm" type="button" onClick={() => inputRef.current?.click()}>⬆ Nhập sao lưu</button>
           <input
             ref={inputRef}
@@ -208,6 +213,7 @@ export function AppShell({ children }: PropsWithChildren) {
 
       {backup ? <BackupModal {...backup} onClose={() => setBackup(null)} /> : null}
       <AssistantWidget />
+      <ToastViewport />
     </>
   );
 }
