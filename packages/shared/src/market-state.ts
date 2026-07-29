@@ -1,10 +1,9 @@
 import type {
   FinanceStore,
-  FundCategory,
-  GoldLot,
   HoldingLot,
   MarketQuotesResponse,
 } from "./index.js";
+import { goldCostBasisVnd } from "./gold.js";
 
 function stockQuote(store: FinanceStore, lot: HoldingLot) {
   const symbol = lot.ticker.trim().toUpperCase();
@@ -18,22 +17,11 @@ function cryptoQuote(store: FinanceStore, lot: HoldingLot) {
   return providerId ? store.market.crypto[providerId] : undefined;
 }
 
-function legacyLotPrice(store: FinanceStore, lot: HoldingLot, category: FundCategory): number {
-  const shared = store.prices[lot.ticker.trim().toUpperCase()];
-  const unit = lot.manualPrice !== null && lot.manualPrice !== undefined && lot.manualPrice !== 0 ? lot.manualPrice : shared;
-  const price = Number(unit) || 0;
-  return category === "crypto" ? price * (store.market.fx?.usdVnd ?? store.usdRate ?? 0) : price;
-}
-
-function currentLotPriceVnd(store: FinanceStore, lot: HoldingLot, category: FundCategory): number {
-  if (category === "stock") return stockQuote(store, lot)?.priceVnd ?? legacyLotPrice(store, lot, category);
-  const quote = cryptoQuote(store, lot);
-  if (quote && (store.market.fx?.usdVnd ?? 0) > 0) return quote.priceUsd * store.market.fx!.usdVnd;
-  return legacyLotPrice(store, lot, category);
-}
-
-function goldLotPriceVnd(store: FinanceStore, lot: GoldLot): number {
-  return store.market.gold?.vndPerChi || Number(lot.manualPrice) || 0;
+function holdingCostVnd(lot: HoldingLot, category: "stock" | "crypto"): number {
+  const quantity = Number(lot.qty) || 0;
+  const purchasePrice = Number(lot.purchasePrice) || 0;
+  const unit = category === "crypto" ? purchasePrice * (Number(lot.purchaseFxVnd) || 0) : purchasePrice;
+  return quantity * unit + (Number(lot.feeVnd) || 0);
 }
 
 export function applyMarketResponse(store: FinanceStore, response: MarketQuotesResponse): void {
@@ -76,20 +64,24 @@ export function recalculateMarketFundAmounts(store: FinanceStore): void {
         const detail = data.details[fund.id]?.[month];
         if (!detail) continue;
         if (category === "gold" && detail.type === "gold") {
-          const value = detail.lots.reduce((sum, lot) => sum + lot.chi * goldLotPriceVnd(store, lot), 0);
-          if (value > 0) data.funds[fund.id]![month] = Math.round(value);
+          const hasGold = detail.lots.some((lot) => lot.chi > 0);
+          const complete = detail.lots.every((lot) => lot.chi <= 0 || goldCostBasisVnd(lot) > 0);
+          if (hasGold && complete) {
+            data.funds[fund.id]![month] = Math.round(detail.lots.reduce((sum, lot) => sum + goldCostBasisVnd(lot), 0));
+          }
         } else if ((category === "stock" || category === "crypto") && detail.type === "hold") {
-          let value = 0;
+          let cost = 0;
           let complete = true;
           let hasQuantity = false;
           for (const lot of detail.lots) {
             if (!(lot.qty > 0)) continue;
             hasQuantity = true;
-            const price = currentLotPriceVnd(store, lot, category);
-            if (!(price > 0)) complete = false;
-            else value += lot.qty * price;
+            if (!(Number(lot.purchasePrice) > 0) || (category === "crypto" && !(Number(lot.purchaseFxVnd) > 0))) {
+              complete = false;
+            }
+            cost += holdingCostVnd(lot, category);
           }
-          if (hasQuantity && complete) data.funds[fund.id]![month] = Math.round(value);
+          if (hasQuantity && complete) data.funds[fund.id]![month] = Math.round(cost);
         }
       }
     }

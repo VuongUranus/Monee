@@ -275,6 +275,14 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 .computed-button { display: inline-flex; flex-direction: column; align-items: flex-end; color: var(--blue); background: none; border: 0; }
 .computed-button small { color: var(--muted); font-size: 10px; }
 .fund-tag { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 3px; vertical-align: middle; }
+.fund-allocation-scroll { overflow-x: hidden; }
+.fund-allocation-table { min-width: 0; table-layout: fixed; }
+.fund-allocation-table th, .fund-allocation-table td { overflow-wrap: anywhere; }
+.fund-allocation-table th:nth-child(1), .fund-allocation-table td:nth-child(1) { width: 34%; }
+.fund-allocation-table th:nth-child(2), .fund-allocation-table td:nth-child(2) { width: 19%; }
+.fund-allocation-table th:nth-child(3), .fund-allocation-table td:nth-child(3) { width: 21%; }
+.fund-allocation-table th:nth-child(4), .fund-allocation-table td:nth-child(4) { width: 9%; }
+.fund-allocation-table th:nth-child(5), .fund-allocation-table td:nth-child(5) { width: 17%; }
 .goal-card table { min-width: 1040px; }
 .goal-cell { color: var(--muted); font-size: 11.5px; }
 .need-cell { color: var(--blue); font-weight: 650; white-space: nowrap; }
@@ -407,6 +415,13 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 .asset-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
 .asset-fields label { display: block; min-width: 0; color: var(--muted); font-size: 10.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
 .asset-fields input { display: block; width: 100%; margin-top: 5px; text-transform: none; }
+.asset-fields input.money, .gold-manual-price input.money {
+  width: 100%;
+  color: var(--ink);
+  background: var(--card);
+  border-color: var(--line);
+  text-align: left;
+}
 .asset-fields input[readonly] { color: var(--muted); background: var(--surface); cursor: default; }
 .asset-fields .asset-note { grid-column: span 2; }
 .gold-cost-method { grid-column: 1 / -1; min-width: 0; margin: 1px 0 0; padding: 0; border: 0; }
@@ -499,6 +514,34 @@ table .custom-select { max-width: 160px; font-size: 13px; }
   .manager-add { flex-wrap: wrap; }
   .manager-add input:not([type="color"]) { min-width: 180px; }
   .asset-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .fund-allocation-scroll { overflow-x: visible; }
+  .fund-allocation-table { min-width: 0; }
+  .fund-allocation-table thead { display: none; }
+  .fund-allocation-table, .fund-allocation-table tbody, .fund-allocation-table tfoot,
+  .fund-allocation-table tr, .fund-allocation-table td { display: block; width: 100%; }
+  .fund-allocation-table th:nth-child(n), .fund-allocation-table td:nth-child(n) { width: 100%; }
+  .fund-allocation-table tbody, .fund-allocation-table tfoot { display: grid; gap: 10px; }
+  .fund-allocation-table tbody tr, .fund-allocation-table tfoot tr {
+    overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .fund-allocation-table td {
+    display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line);
+  }
+  .fund-allocation-table td::before {
+    content: attr(data-label); flex: 1; color: var(--muted); font-size: 10.5px; font-weight: 750;
+    letter-spacing: .05em; text-align: left; text-transform: uppercase;
+  }
+  .fund-allocation-table tbody td:first-child, .fund-allocation-table tfoot td:first-child {
+    display: block; min-height: 0; padding: 11px 12px; color: var(--ink); background: var(--card); text-align: left;
+  }
+  .fund-allocation-table tbody td:first-child::before, .fund-allocation-table tfoot td:first-child::before { display: none; }
+  .fund-allocation-table td:last-child { border-bottom: 0; }
+  .fund-allocation-table input.money { width: min(180px, 58vw); }
+  .fund-allocation-table .computed-button { margin-left: auto; }
 }
 
 @media (max-width: 520px) {

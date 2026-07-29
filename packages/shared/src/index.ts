@@ -586,6 +586,12 @@ export interface FundOverviewItem extends Fund {
   yearAmounts: number[];
   yearTotal: number;
   allTimeTotal: number;
+  /** Giá trị theo quote thị trường mới nhất của các giao dịch trong tháng đang xem. */
+  monthCurrentValue: number;
+  /** Giá trị theo quote thị trường mới nhất của các giao dịch trong năm đang xem. */
+  yearCurrentValue: number;
+  /** Giá trị theo quote thị trường mới nhất của toàn bộ giao dịch. */
+  allTimeCurrentValue: number;
   contributionAmount: number;
   contributionCount: number;
 }

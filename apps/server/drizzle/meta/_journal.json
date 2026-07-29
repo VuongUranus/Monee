@@ -57,6 +57,13 @@
       "when": 1785314316987,
       "tag": "0007_gold_cost_basis",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785318000000,
+      "tag": "0008_backfill_investment_cost_amounts",
+      "breakpoints": true
     }
   ]
 }

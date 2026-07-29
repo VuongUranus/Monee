@@ -33,6 +33,7 @@ import type {
   TransactionQuery,
 } from "@chi-tieu/shared";
 import type { FinanceDatabase } from "./client.js";
+import { currentInvestmentValueVnd } from "./fund-valuation.js";
 import { readGoldCostBasis } from "./gold-cost-basis.js";
 import * as schema from "./schema.js";
 import { readDebtSummary } from "./debt-queries.js";
@@ -430,7 +431,7 @@ export async function readFundOverview(
 ): Promise<FundOverviewResponse> {
   const fundRows = await accessibleFunds(db, userId);
   const ids = fundRows.map((fund) => fund.id);
-  const [yearMonths, allTimeTotals, periodTotals, goals, contributions, notes, settings, incomeRows, assetRows, market, debtSummary] = await Promise.all([
+  const [yearMonths, allTimeTotals, periodTotals, goals, contributions, notes, settings, incomeRows, valuationRows, market, debtSummary] = await Promise.all([
     ids.length ? db.select({
       fundId: schema.fundMonths.fundId,
       month: schema.fundMonths.month,
@@ -477,15 +478,23 @@ export async function readFundOverview(
           new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10),
         ),
       )),
-    ids.length ? db.selectDistinct({
+    ids.length ? db.select({
+      fundId: schema.fundMonths.fundId,
+      year: schema.fundMonths.year,
+      month: schema.fundMonths.month,
       category: schema.funds.category,
       ticker: schema.holdingLots.ticker,
+      quantity: schema.holdingLots.quantity,
+      holdingManualPrice: schema.holdingLots.manualPrice,
       exchange: schema.holdingLots.exchange,
       providerId: schema.holdingLots.providerId,
+      chi: schema.goldLots.chi,
+      goldManualPrice: schema.goldLots.manualPrice,
     }).from(schema.funds)
-      .leftJoin(schema.fundMonths, eq(schema.fundMonths.fundId, schema.funds.id))
+      .innerJoin(schema.fundMonths, eq(schema.fundMonths.fundId, schema.funds.id))
       .leftJoin(schema.fundMonthDetails, eq(schema.fundMonthDetails.fundMonthId, schema.fundMonths.id))
       .leftJoin(schema.holdingLots, eq(schema.holdingLots.detailId, schema.fundMonthDetails.id))
+      .leftJoin(schema.goldLots, eq(schema.goldLots.detailId, schema.fundMonthDetails.id))
       .where(inArray(schema.funds.id, ids)) : [],
     readMarket(db, userId),
     readDebtSummary(db, userId),
@@ -502,9 +511,18 @@ export async function readFundOverview(
   const activeYearMonths = periodTotals.filter((entry) => entry.year === year && asNumber(entry.amount) > 0).length;
   const activeAllTimeMonths = periodTotals.filter((entry) => asNumber(entry.amount) > 0).length;
   const marketAssetMap = new Map<string, MarketAssetRequest>();
-  for (const row of assetRows) {
+  const currentValuesByFund = new Map<string, { month: number; year: number; all: number }>();
+  const addCurrentValue = (fundId: string, value: number, valueYear: number, valueMonth: number): void => {
+    const totals = currentValuesByFund.get(fundId) ?? { month: 0, year: 0, all: 0 };
+    totals.all += value;
+    if (valueYear === year) totals.year += value;
+    if (valueYear === year && valueMonth === month) totals.month += value;
+    currentValuesByFund.set(fundId, totals);
+  };
+  for (const row of valuationRows) {
     if (row.category === "gold") {
       marketAssetMap.set("gold", { type: "gold" });
+      addCurrentValue(row.fundId, currentInvestmentValueVnd(row, market), row.year, row.month);
       continue;
     }
     const symbol = row.ticker?.trim().toUpperCase();
@@ -513,6 +531,10 @@ export async function readFundOverview(
       ? { type: "stock" as const, symbol, ...(row.exchange ? { exchange: row.exchange } : {}) }
       : { type: "crypto" as const, symbol, ...(row.providerId ? { providerId: row.providerId } : {}) };
     marketAssetMap.set(JSON.stringify(asset), asset);
+    addCurrentValue(row.fundId, currentInvestmentValueVnd(row, market), row.year, row.month);
+  }
+  for (const fund of fundRows) {
+    if (fund.category === "gold") marketAssetMap.set("gold", { type: "gold" });
   }
   const marketAssets = [...marketAssetMap.values()];
   return {
@@ -531,6 +553,11 @@ export async function readFundOverview(
     funds: fundRows.map((fund): FundOverviewItem => {
       const yearAmounts = yearAmountsByFund.get(fund.id) ?? new Array<number>(12).fill(0);
       const periodContributions = contributions.filter((entry) => entry.fundId === fund.id);
+      const yearTotal = yearAmounts.reduce((sum, amount) => sum + amount, 0);
+      const allTimeTotal = allTimeTotalByFund.get(fund.id) ?? 0;
+      const currentValues = fund.category === "saving"
+        ? { month: yearAmounts[month - 1] ?? 0, year: yearTotal, all: allTimeTotal }
+        : currentValuesByFund.get(fund.id) ?? { month: 0, year: 0, all: 0 };
       return {
         id: fund.externalId,
         name: fund.name,
@@ -547,8 +574,11 @@ export async function readFundOverview(
         allGoal: fund.allGoal,
         monthAmount: yearAmounts[month - 1] ?? 0,
         yearAmounts,
-        yearTotal: yearAmounts.reduce((sum, amount) => sum + amount, 0),
-        allTimeTotal: allTimeTotalByFund.get(fund.id) ?? 0,
+        yearTotal,
+        allTimeTotal,
+        monthCurrentValue: Math.round(currentValues.month),
+        yearCurrentValue: Math.round(currentValues.year),
+        allTimeCurrentValue: Math.round(currentValues.all),
         contributionAmount: periodContributions.reduce((sum, entry) => sum + entry.amount, 0),
         contributionCount: periodContributions.length,
       };

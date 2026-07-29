@@ -50,6 +50,22 @@ function liveAllTimeTotal(overview: FundOverviewItem | undefined, yearTotal: num
   return overview.allTimeTotal + yearTotal - overview.yearTotal;
 }
 
+function liveMonthCurrentValue(overview: FundOverviewItem | undefined, monthCost: number): number {
+  if (!overview || overview.cat === "saving") return monthCost;
+  return overview.monthCurrentValue;
+}
+
+function liveYearCurrentValue(overview: FundOverviewItem | undefined, yearCost: number): number {
+  if (!overview || overview.cat === "saving") return yearCost;
+  return overview.yearCurrentValue;
+}
+
+function liveAllTimeCurrentValue(overview: FundOverviewItem | undefined, yearCost: number): number {
+  if (!overview) return yearCost;
+  if (overview.cat === "saving") return liveAllTimeTotal(overview, yearCost);
+  return overview.allTimeCurrentValue;
+}
+
 function addMarketAssetsFromDetail(state: any, fundId: string, detail: FundDetail): void {
   if (!detail || !state.fundOverview) return;
   const category = state.ledger.funds.find((fund: Fund) => fund.id === fundId)?.cat;
@@ -87,6 +103,11 @@ function reconcileFundMonth(
       if (overview.month === result.month) fund.monthAmount = result.amount;
       fund.yearTotal += result.amount - previous;
       fund.allTimeTotal += result.amount - previous;
+      if (fund.cat === "saving") {
+        if (overview.month === result.month) fund.monthCurrentValue = result.amount;
+        fund.yearCurrentValue += result.amount - previous;
+        fund.allTimeCurrentValue += result.amount - previous;
+      }
       const afterPeriodTotal = beforePeriodTotal - previous + result.amount;
       if (beforePeriodTotal === 0 && afterPeriodTotal > 0) {
         overview.yearActiveMonths += 1;
@@ -157,12 +178,24 @@ export function FundsPage() {
       return sum + liveAllTimeTotal(overview, sumFundAmounts(yearData.funds[fund.id]));
     }, 0)
     : totalYtd;
+  const currentMonthTotal = ledger.funds.reduce((sum, fund) => {
+    const cost = yearData.funds[fund.id]?.[month] ?? 0;
+    const overview = fundOverview?.funds.find((item) => item.id === fund.id);
+    return sum + liveMonthCurrentValue(overview, cost);
+  }, 0);
+  const scopeCurrentTotal = ledger.funds.reduce((sum, fund) => {
+    const yearCost = sumFundAmounts(yearData.funds[fund.id]);
+    const overview = fundOverview?.funds.find((item) => item.id === fund.id);
+    return sum + (scope === "all"
+      ? liveAllTimeCurrentValue(overview, yearCost)
+      : liveYearCurrentValue(overview, yearCost));
+  }, 0);
   const scopeMonths = scope === "all"
     ? fundOverview?.allTimeActiveMonths ?? 0
     : activeYearMonths;
   const accumulatedAssets = ledger.funds.reduce((sum, fund) => {
     const overview = fundOverview?.funds.find((item) => item.id === fund.id);
-    return sum + liveAllTimeTotal(overview, sumFundAmounts(yearData.funds[fund.id]));
+    return sum + liveAllTimeCurrentValue(overview, sumFundAmounts(yearData.funds[fund.id]));
   }, 0);
   const openingAssets = ledger.funds.reduce((sum, fund) => sum + (ledger.financialProfile.openingBalances[fund.id] ?? 0), 0);
   const assets = accumulatedAssets + openingAssets;
@@ -216,7 +249,8 @@ export function FundsPage() {
         <Stat label="Phân bổ tháng này" value={fmt(total)} meta={income ? `${Math.round(total / income * 100)}% thu nhập` : "chưa có thu nhập"} accent="gold" />
         <div className="stat accent-green">
           <div className="k">{scope === "all" ? "Lũy kế toàn bộ" : `Lũy kế năm ${year}`}</div>
-          <div className="v">{fmt(scopeTotal)}</div>
+          <div className="v">{fmt(scopeCurrentTotal)}</div>
+          <div className="m">Giá vốn {fmt(scopeTotal)}</div>
           <Select<"year" | "all">
             value={scope}
             options={[{ value: "year", label: "Năm đang xem" }, { value: "all", label: "Toàn bộ" }]}
@@ -226,8 +260,8 @@ export function FundsPage() {
             compact
           />
         </div>
-        <Stat label="Trung bình" value={fmt(scopeMonths ? scopeTotal / scopeMonths : 0)} meta={`${scopeMonths} tháng có nhập`} />
-        <Stat label="Tổng tài sản" value={fmt(assets)} meta="lũy kế + số dư ban đầu" accent="blue" />
+        <Stat label="TB phân bổ (giá vốn)" value={fmt(scopeMonths ? scopeTotal / scopeMonths : 0)} meta={`${scopeMonths} tháng có nhập`} />
+        <Stat label="Tổng tài sản" value={fmt(assets)} meta="giá hiện tại + số dư ban đầu" accent="blue" />
         <Stat label="Nợ phải trả" value={fmt(debt)} meta={receivables ? `phải thu ${fmt(receivables)}` : "xem chi tiết ở Vay & nợ"} accent="rust" />
         <Stat label="Tài sản ròng" value={fmt(assets + receivables - debt)} meta="tài sản + phải thu − nợ" accent="green" />
       </div>
@@ -236,21 +270,21 @@ export function FundsPage() {
         <article className="card">
           <h2>Phân bổ theo quỹ — {MONTHS_FULL[month]} / {year}</h2>
           <p className="hint">Có thể nhập phép tính như <code>5tr+500k</code> bằng số đầy đủ, ví dụ <code>5000000+500000</code>.</p>
-          <div className="table-scroll">
-            <table>
-              <thead><tr><th>Quỹ</th><th>Tháng này</th><th>Thành viên gửi</th><th>% thu</th><th>Lũy kế năm</th></tr></thead>
+          <div className="table-scroll fund-allocation-scroll">
+            <table className="fund-allocation-table">
+              <thead><tr><th>Quỹ</th><th>Giá vốn tháng</th><th>Giá hiện tại tháng</th><th>% thu</th><th>Giá hiện tại lũy kế năm</th></tr></thead>
               <tbody>
                 {ledger.funds.map((fund) => {
                   const value = yearData.funds[fund.id]?.[month] ?? 0;
                   const category = fundCategory(fund);
                   const overview = fundOverview?.funds.find((item) => item.id === fund.id);
-                  const contributed = overview?.contributionAmount ?? 0;
-                  const contributionCount = overview?.contributionCount ?? 0;
                   const yearTotal = sumFundAmounts(yearData.funds[fund.id]);
+                  const monthCurrentValue = liveMonthCurrentValue(overview, value);
+                  const yearCurrentValue = liveYearCurrentValue(overview, yearTotal);
                   return (
                     <tr key={fund.id}>
-                      <td><span className="fund-tag" style={{ background: fund.color }} />{fund.name}<small className="table-meta">{FUND_CATEGORIES[category].short}</small></td>
-                      <td>
+                      <td data-label="Quỹ"><span className="fund-tag" style={{ background: fund.color }} />{fund.name}<small className="table-meta">{FUND_CATEGORIES[category].short}</small></td>
+                      <td data-label="Giá vốn tháng">
                         {category === "saving" && fund.sharing?.role !== "viewer" ? (
                           <MoneyInput
                             value={value}
@@ -286,14 +320,17 @@ export function FundsPage() {
                           </button>
                         )}
                       </td>
-                      <td>{fund.sharing ? <button className="computed-button" type="button" onClick={() => setContributionFundId(fund.id)}><strong>{fmt(contributed)}</strong><small>{contributionCount ? `${contributionCount} khoản` : "Ghi nhận"}</small></button> : "—"}</td>
-                      <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
-                      <td>{fmt(yearTotal)}</td>
+                      <td data-label="Giá hiện tại tháng"><strong>{fmt(monthCurrentValue)}</strong></td>
+                      <td data-label="% thu">{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
+                      <td data-label="Giá hiện tại lũy kế năm"><strong>{fmt(yearCurrentValue)}</strong></td>
                     </tr>
                   );
                 })}
               </tbody>
-              <tfoot><tr><td>Tổng cộng</td><td>{fmt(total)}</td><td>—</td><td>{income ? `${Math.round(total / income * 100)}%` : "0%"}</td><td>{fmt(totalYtd)}</td></tr></tfoot>
+              <tfoot><tr><td data-label="Tổng">Tổng cộng</td><td data-label="Giá vốn tháng">{fmt(total)}</td><td data-label="Giá hiện tại tháng">{fmt(currentMonthTotal)}</td><td data-label="% thu">{income ? `${Math.round(total / income * 100)}%` : "0%"}</td><td data-label="Giá hiện tại lũy kế năm">{fmt(ledger.funds.reduce((sum, fund) => {
+                const overview = fundOverview?.funds.find((item) => item.id === fund.id);
+                return sum + liveYearCurrentValue(overview, sumFundAmounts(yearData.funds[fund.id]));
+              }, 0))}</td></tr></tfoot>
             </table>
           </div>
           <label className="field-block">
@@ -324,21 +361,25 @@ export function FundsPage() {
 
         <article className="card">
           <h2>Cơ cấu tháng này</h2>
-          <p className="hint">Tỷ trọng từng quỹ trong tổng số tiền phân bổ.</p>
+          <p className="hint">Tỷ trọng từng quỹ theo giá trị hiện tại; giá vốn vẫn được giữ riêng trong bảng phân bổ.</p>
           <div className="chart-wrap donut">
             <DonutChart
               labels={ledger.funds.map((fund) => fund.name)}
-              values={ledger.funds.map((fund) => yearData.funds[fund.id]?.[month] ?? 0)}
+              values={ledger.funds.map((fund) => {
+                const cost = yearData.funds[fund.id]?.[month] ?? 0;
+                return liveMonthCurrentValue(fundOverview?.funds.find((item) => item.id === fund.id), cost);
+              })}
               colors={ledger.funds.map((fund) => fund.color)}
             />
           </div>
           <div className="legend">
             {ledger.funds.map((fund) => {
-              const value = yearData.funds[fund.id]?.[month] ?? 0;
+              const cost = yearData.funds[fund.id]?.[month] ?? 0;
+              const value = liveMonthCurrentValue(fundOverview?.funds.find((item) => item.id === fund.id), cost);
               return (
                 <div className="row" key={fund.id}>
                   <span className="lbl"><span className="fund-tag" style={{ background: fund.color }} />{fund.name}</span>
-                  <span className="pct">{fmt(value)} · {total ? Math.round(value / total * 100) : 0}%</span>
+                  <span className="pct">{fmt(value)} · {currentMonthTotal ? Math.round(value / currentMonthTotal * 100) : 0}%</span>
                 </div>
               );
             })}
@@ -425,28 +466,29 @@ function GoalsTable() {
   const totals = ledger.funds.reduce((result, fund) => {
     const overview = fundOverview?.funds.find((item) => item.id === fund.id);
     const goal = ledger.goals[fund.id] ?? { years: {}, all: 0 };
-    const ytd = sumFundAmounts(yearData?.funds[fund.id]);
+    const yearCost = sumFundAmounts(yearData?.funds[fund.id]);
     result.yearGoal += goal.years[String(year)] ?? 0;
     result.allGoal += goal.all;
-    result.ytd += ytd;
-    result.all += liveAllTimeTotal(overview, ytd);
+    result.yearCurrent += liveYearCurrentValue(overview, yearCost);
+    result.allCurrent += liveAllTimeCurrentValue(overview, yearCost);
     return result;
-  }, { yearGoal: 0, allGoal: 0, ytd: 0, all: 0 });
+  }, { yearGoal: 0, allGoal: 0, yearCurrent: 0, allCurrent: 0 });
 
   return (
     <article className="card goal-card">
       <div className="table-scroll">
         <table>
-          <thead><tr><th>Quỹ</th><th>Mục tiêu {year}</th><th>Đã tích lũy</th><th>Tiến độ</th><th>Cần/tháng</th><th>Mục tiêu toàn bộ</th><th>Tích lũy toàn bộ</th><th>Tiến độ</th></tr></thead>
+          <thead><tr><th>Quỹ</th><th>Mục tiêu {year}</th><th>Tích lũy {year}</th><th>Tiến độ</th><th>Cần/tháng</th><th>Mục tiêu toàn bộ</th><th>Tích lũy toàn bộ</th><th>Tiến độ</th></tr></thead>
           <tbody>
             {ledger.funds.map((fund) => {
               const overview = fundOverview?.funds.find((item) => item.id === fund.id);
               const goal = ledger.goals[fund.id] ?? { years: {}, all: 0 };
               const yearGoal = goal.years[String(year)] ?? 0;
               const allGoal = goal.all;
-              const ytd = sumFundAmounts(yearData?.funds[fund.id]);
-              const all = liveAllTimeTotal(overview, ytd);
-              const remaining = Math.max(0, yearGoal - ytd);
+              const yearCost = sumFundAmounts(yearData?.funds[fund.id]);
+              const yearCurrent = liveYearCurrentValue(overview, yearCost);
+              const allCurrent = liveAllTimeCurrentValue(overview, yearCost);
+              const remaining = Math.max(0, yearGoal - yearCurrent);
               const need = remaining > 0 ? Math.ceil(remaining / (12 - month)) : 0;
               return (
                 <tr key={fund.id}>
@@ -456,22 +498,24 @@ function GoalsTable() {
                     if (value > 0) target.years[String(year)] = value;
                     else delete target.years[String(year)];
                   })} />}</td>
-                  <td>{fmt(ytd)}</td>
-                  <td><Progress value={ytd} goal={yearGoal} color={fund.color} /></td>
+                  <td><strong>{fmt(yearCurrent)}</strong></td>
+                  <td><Progress value={yearCurrent} goal={yearGoal} color={fund.color} /></td>
                   <td className="need-cell">{yearGoal ? (remaining ? <>{fmt(need)}<small>còn thiếu {fmtShort(remaining)}</small></> : <span className="ok">✓ đã đạt</span>) : <span className="goal-cell">chưa đặt</span>}</td>
                   <td>{fund.sharing?.role === "viewer" ? (allGoal ? fmt(allGoal) : "—") : <MoneyInput value={allGoal} onCommit={(value) => saveGoal(fund, null, value, (draft) => { getGoal(draft as any, fund.id).all = value; })} />}</td>
-                  <td>{fmt(all)}</td>
-                  <td><Progress value={all} goal={allGoal} color={fund.color} /></td>
+                  <td><strong>{fmt(allCurrent)}</strong></td>
+                  <td><Progress value={allCurrent} goal={allGoal} color={fund.color} /></td>
                 </tr>
               );
             })}
           </tbody>
           <tfoot>
             <tr>
-              <td>Tổng cộng</td><td>{totals.yearGoal ? fmt(totals.yearGoal) : "—"}</td><td>{fmt(totals.ytd)}</td>
-              <td><Progress value={totals.ytd} goal={totals.yearGoal} color="#3b6ea5" /></td><td />
-              <td>{totals.allGoal ? fmt(totals.allGoal) : "—"}</td><td>{fmt(totals.all)}</td>
-              <td><Progress value={totals.all} goal={totals.allGoal} color="#3b6ea5" /></td>
+              <td>Tổng cộng</td><td>{totals.yearGoal ? fmt(totals.yearGoal) : "—"}</td>
+              <td>{fmt(totals.yearCurrent)}</td>
+              <td><Progress value={totals.yearCurrent} goal={totals.yearGoal} color="#3b6ea5" /></td><td />
+              <td>{totals.allGoal ? fmt(totals.allGoal) : "—"}</td>
+              <td>{fmt(totals.allCurrent)}</td>
+              <td><Progress value={totals.allCurrent} goal={totals.allGoal} color="#3b6ea5" /></td>
             </tr>
           </tfoot>
         </table>
@@ -794,6 +838,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   const ledger = useFinanceStore((state) => state.ledger);
   const year = useFinanceStore((state) => state.selectedYear);
   const month = useFinanceStore((state) => state.selectedMonth);
+  const loadFunds = useFinanceStore((state) => state.loadFunds);
   const persistMarketQuotes = useFinanceStore((state) => state.persistMarketQuotes);
   const mutateLedger = useFinanceStore((state) => state.mutateLedger);
   const mutateSharedLedger = useFinanceStore((state) => state.mutateSharedLedger);
@@ -808,6 +853,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   });
   const [cryptoMatches, setCryptoMatches] = useState<Record<number, CryptoMatch[]>>({});
   const [lookupMessage, setLookupMessage] = useState<Record<number, string>>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
   type GoldCostMode = NonNullable<GoldLot["costBasis"]>["type"];
   type GoldLookupState = { status: "idle" | "loading" | "ready" | "error"; message: string };
   const [goldCostModes, setGoldCostModes] = useState<GoldCostMode[]>(() =>
@@ -834,7 +880,30 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   });
   const defaultGoldLot = (): GoldLot => ({ chi: 0, manualPrice: null, costBasis: null });
 
+  const costValidationMessage = (): string | null => {
+    if (detail?.type === "gold") {
+      const index = detail.lots.findIndex((lot) => lot.chi > 0 && !(goldLotCostVnd(lot) > 0));
+      return index === -1 ? null : `Giao dịch vàng #${index + 1} cần có giá vốn trước khi lưu.`;
+    }
+    if (detail?.type !== "hold") return null;
+    const lotIndex = detail.lots.findIndex((lot) => lot.qty > 0 && (
+      !lot.ticker.trim()
+      || !(Number(lot.purchasePrice) > 0)
+      || (category === "crypto" && !(Number(lot.purchaseFxVnd) > 0))
+    ));
+    if (lotIndex === -1) return null;
+    if (!detail.lots[lotIndex]?.ticker.trim()) return `${category === "stock" ? "Mã cổ phiếu" : "Mã crypto"} #${lotIndex + 1} chưa được nhập.`;
+    if (!(Number(detail.lots[lotIndex]?.purchasePrice) > 0)) return `Giao dịch #${lotIndex + 1} cần có giá mua trước khi lưu.`;
+    return `Giao dịch crypto #${lotIndex + 1} cần có tỷ giá lúc mua trước khi lưu.`;
+  };
+
   const save = async (): Promise<void> => {
+    const validationMessage = costValidationMessage();
+    if (validationMessage) {
+      setSaveError(validationMessage);
+      return;
+    }
+    setSaveError(null);
     let savedAmount = 0;
     let savedDetail: FundDetail = null;
     const recipe = (draft: any): void => {
@@ -843,15 +912,15 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
         const lots = detail.lots.filter((lot) => lot.chi > 0 || lot.costBasis || lot.manualPrice || lot.note?.trim());
         const next: GoldDetail = { type: "gold", lots: structuredClone(lots) };
         target.details[fundId]![month] = next;
-        target.funds[fundId]![month] = Math.round(lots.reduce((sum, lot) => sum + lot.chi * goldLotPriceVnd(draft as any, lot), 0));
+        target.funds[fundId]![month] = Math.round(lots.reduce((sum, lot) => sum + goldLotCostVnd(lot), 0));
         savedDetail = next;
         savedAmount = target.funds[fundId]![month];
       } else if (detail?.type === "hold") {
         const lots = detail.lots.filter((lot) => lot.ticker.trim() || lot.qty > 0 || lot.purchasePrice || lot.manualPrice || lot.feeVnd || lot.note?.trim());
         const next: HoldingDetail = { type: "hold", lots: structuredClone(lots) };
         target.details[fundId]![month] = next;
-        const value = lots.reduce((sum, lot) => sum + lot.qty * currentLotPriceVnd(draft as any, lot, category), 0);
-        target.funds[fundId]![month] = Math.round(value);
+        target.funds[fundId]![month] = Math.round(lots.reduce((sum, lot) =>
+          sum + holdingCostVnd(lot, category as "stock" | "crypto"), 0));
         savedDetail = next;
         savedAmount = target.funds[fundId]![month];
       }
@@ -874,12 +943,14 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
         reconcile: (state, result) => reconcileFundMonth(state, result, true),
       });
     }
+    await loadFunds(true);
     onClose();
   };
 
   const holding = detail?.type === "hold" ? detail : null;
   const updateLot = (index: number, patch: Partial<HoldingLot>): void => {
     if (!holding) return;
+    setSaveError(null);
     const lots = holding.lots.map((lot, itemIndex) => {
       if (itemIndex !== index) return lot;
       const next = { ...lot, ...patch };
@@ -936,6 +1007,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
       : ledger.market.fx ? `Crypto quy đổi theo USD/VND ${fmtNumber(ledger.market.fx.usdVnd)}` : "Chưa có tỷ giá USD/VND";
 
   const updateGoldLot = (index: number, patch: Partial<GoldLot>): void => {
+    setSaveError(null);
     setDetail((current) => {
       if (current?.type !== "gold") return current;
       return {
@@ -1022,6 +1094,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
     }
   };
   const changeGoldPurchaseDate = (index: number, date: string): void => {
+    setSaveError(null);
     setDetail((current) => {
       if (current?.type !== "gold") return current;
       return {
@@ -1049,6 +1122,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
     }
   };
   const removeGoldLot = (index: number): void => {
+    setSaveError(null);
     for (const controller of goldLookupControllers.current.values()) controller.abort();
     goldLookupControllers.current.clear();
     goldLookupSequences.current = {};
@@ -1071,6 +1145,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
           <div><span>Vốn đầu tư</span><b>{fmt(invested)}</b></div>
           <div className={total - invested >= 0 ? "gain" : "loss"}><span>Lãi / lỗ</span><b>{invested ? `${total - invested >= 0 ? "+" : ""}${fmt(total - invested)}` : "—"}</b></div>
         </div>
+        {saveError ? <p className="asset-quote-warning" role="alert">{saveError}</p> : null}
 
         <div className="asset-lot-list">
           {gold?.lots.map((lot, index) => {
@@ -1185,6 +1260,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
           })}
         </div>
         <button className="btn sm asset-add" type="button" onClick={() => {
+          setSaveError(null);
           if (gold) {
             setDetail({ ...gold, lots: [...gold.lots, defaultGoldLot()] });
             setGoldCostModes((current) => [...current, "unit_price"]);
@@ -1192,7 +1268,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
             setDetail({ ...holding, lots: [...holding.lots, defaultHoldingLot()] });
           }
         }}>+ Thêm giao dịch</button>
-        <p className="hint">Mỗi giao dịch dùng một cách tính vốn. “Tổng tiền đã trả” đã gồm mọi phí; giá theo ngày là XAU/VND tham chiếu, không phải giá bán lẻ SJC.</p>
+        <p className="hint">Phân bổ của tháng được tính theo vốn đầu tư tại thời điểm mua; giá trị hiện tại chỉ dùng để theo dõi lãi/lỗ. “Tổng tiền đã trả” đã gồm mọi phí; giá theo ngày là XAU/VND tham chiếu, không phải giá bán lẻ SJC.</p>
       </fieldset>
     </Modal>
   );

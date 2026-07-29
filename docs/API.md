@@ -196,7 +196,7 @@ GET /api/transactions?from=2026-07-01&to=2026-07-31&type=expense&q=c%C3%A0%20ph%
 | `GET /api/shared-funds/:id/members` | Tải danh sách thành viên khi mở modal. | Path `id`. | `{ fundId, revision, members: [{ user: { sub, name, email }, role }] }` |
 | `GET /api/shared-funds/:id/contributions?year=2026&month=7` | Tải contribution một kỳ của quỹ chung. | Path `id`; query `year`, `month`. | `{ fundId, revision, period: "2026-07", contributors, items }`; `items` là `{ id, memberId, amount, note, createdAt }[]`. |
 
-Mỗi phần tử `funds` trong overview có metadata `id`, `name`, `color`, `cat`, `fundPlan`, `openingBalance`, `yearGoal`, `allGoal`, `monthAmount`, `yearAmounts` (mảng 12 phần tử), `yearTotal`, `allTimeTotal`, `contributionAmount`, `contributionCount`. Quỹ chung có thêm `revision`, `role` và `owner`.
+Mỗi phần tử `funds` trong overview có metadata `id`, `name`, `color`, `cat`, `fundPlan`, `openingBalance`, `yearGoal`, `allGoal`, `monthAmount`, `yearAmounts` (mảng 12 phần tử), `yearTotal`, `allTimeTotal`, `monthCurrentValue`, `yearCurrentValue`, `allTimeCurrentValue`, `contributionAmount`, `contributionCount`. Ba trường `*Amount`/`*Total` là giá vốn lịch sử; ba trường `*CurrentValue` được dẫn xuất từ quote thị trường mới nhất (với quỹ tiết kiệm thì bằng giá vốn). Quỹ chung có thêm `revision`, `role` và `owner`.
 
 ### Thống kê
 
@@ -348,7 +348,7 @@ Giá được quy đổi từ VND/troy ounce sang VND/chỉ và làm tròn đế
 
 ### `POST /api/market/quotes`
 
-Lấy quote từ provider, lưu các quote chuẩn hoá và tính lại các fund month bị ảnh hưởng trong transaction. Đây là mutation cá nhân, nên body có `expectedRevision`.
+Lấy quote từ provider và lưu các quote chuẩn hoá. Quote mới chỉ phục vụ định giá hiện tại/lãi lỗ; không thay đổi số tiền phân bổ hay số dư của các tháng đã ghi nhận. Đây là mutation cá nhân, nên body có `expectedRevision`.
 
 ```json
 {
@@ -376,7 +376,7 @@ Response:
     "errors": []
   },
   "workspaceRevision": 18,
-  "affectedPeriods": ["2026-07"]
+  "affectedPeriods": []
 }
 ```
 
@@ -387,4 +387,4 @@ Response:
 - Sau bootstrap, chỉ tải resource của route hiện tại. Khi đổi tháng/năm chỉ component của route đó tải lại resource, nên mỗi lần đổi kỳ chỉ có một GET tương ứng.
 - Các `GET` URL giống nhau đang chạy được frontend gộp thành một request để React Strict Mode và event đổi kỳ không tạo request mạng trùng.
 - Khi mutation trả `409 revision_conflict`, xoá personal cache, gọi lại bootstrap rồi tải resource của route hiện tại. Với `shared_fund_conflict`, chỉ refetch overview/detail/members/contributions của quỹ đó.
-- Sau create/update/delete, invalidate đúng dependency: chi tiêu ảnh hưởng expense summary/transactions/statistics. Các cập nhật quỹ cục bộ (số tiền tháng, chi tiết, ghi chú, mục tiêu, preference, metadata, thành viên, đóng góp) vá Zustand từ optimistic state và response mutation, không refetch overview. Thay đổi cấu trúc quỹ, reset tháng, market và conflict mới tải lại overview; market ảnh hưởng overview các `affectedPeriods`.
+- Sau create/update/delete, invalidate đúng dependency: chi tiêu ảnh hưởng expense summary/transactions/statistics. Các cập nhật quỹ cục bộ như số tiền tiết kiệm, ghi chú, mục tiêu, preference, metadata, thành viên và đóng góp được vá từ optimistic state/response mutation. Lưu chi tiết đầu tư tải lại overview để nhận các tổng giá trị hiện tại vừa dẫn xuất; thay đổi cấu trúc quỹ, reset tháng, market và conflict cũng tải lại overview. `market` chỉ làm mới quote định giá hiện tại, nên `affectedPeriods` luôn rỗng.

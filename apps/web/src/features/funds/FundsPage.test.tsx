@@ -39,6 +39,9 @@ describe("FundsPage", () => {
         yearAmounts: [0, 0, 0, 0, 0, 0, 2_500_000, 0, 0, 0, 0, 0],
         yearTotal: 2_500_000,
         allTimeTotal: 2_500_000,
+        monthCurrentValue: 2_500_000,
+        yearCurrentValue: 2_500_000,
+        allTimeCurrentValue: 2_500_000,
         contributionAmount: 0,
         contributionCount: 0,
       }],
@@ -61,13 +64,68 @@ describe("FundsPage", () => {
 
     const totalRow = screen.getAllByText("Tổng cộng")[0]?.closest("tr");
     expect(totalRow).not.toBeNull();
-    expect(within(totalRow!).getAllByText("3,000,000đ")).toHaveLength(2);
+    expect(within(totalRow!).getAllByText("3,000,000đ")).toHaveLength(3);
     expect(within(totalRow!).queryByText("2,500,000đ")).not.toBeInTheDocument();
 
     const goalsCard = screen.getByText("Tích lũy toàn bộ").closest("article");
     expect(goalsCard).not.toBeNull();
     expect(within(goalsCard!).getAllByText("3,000,000đ")).toHaveLength(4);
     expect(within(goalsCard!).queryByText("2,500,000đ")).not.toBeInTheDocument();
+  });
+
+  it("tách giá vốn và giá hiện tại, dùng giá hiện tại cho tiến độ mục tiêu", () => {
+    const ledger = createDefaultStore();
+    ledger.funds = [{ id: "gold", name: "Vàng", color: "#c8963e", cat: "gold" }];
+    ledger.years["2026"] = blankYearWith(ledger.funds);
+    ledger.years["2026"]!.funds.gold![6] = 3_000_000;
+    ledger.goals.gold = { years: { "2026": 10_000_000 }, all: 20_000_000 };
+    ledger.showGoals = true;
+    const overview: FundOverviewResponse = {
+      year: 2026,
+      month: 7,
+      note: "",
+      income: 20_000_000,
+      yearActiveMonths: 1,
+      allTimeActiveMonths: 1,
+      showGoals: true,
+      debt: ledger.financialProfile.debt,
+      funds: [{
+        ...ledger.funds[0]!,
+        fundPlan: 0,
+        openingBalance: 0,
+        yearGoal: 10_000_000,
+        allGoal: 20_000_000,
+        monthAmount: 3_000_000,
+        yearAmounts: [0, 0, 0, 0, 0, 0, 3_000_000, 0, 0, 0, 0, 0],
+        yearTotal: 3_000_000,
+        allTimeTotal: 3_000_000,
+        monthCurrentValue: 6_000_000,
+        yearCurrentValue: 6_000_000,
+        allTimeCurrentValue: 6_000_000,
+        contributionAmount: 0,
+        contributionCount: 0,
+      }],
+      marketAssets: [{ type: "gold" }],
+      market: ledger.market,
+    };
+    useFinanceStore.setState({ ledger, fundOverview: overview });
+
+    render(<MemoryRouter><FundsPage /></MemoryRouter>);
+
+    expect(screen.getByRole("columnheader", { name: "Giá vốn tháng" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Giá hiện tại tháng" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Thành viên gửi" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Giá vốn lũy kế năm" })).not.toBeInTheDocument();
+    const allocationRow = screen.getAllByText("Vàng")[0]!.closest("tr")!;
+    expect(within(allocationRow).getAllByText("3,000,000đ")).toHaveLength(1);
+    expect(within(allocationRow).getAllByText("6,000,000đ")).toHaveLength(2);
+
+    const goalsCard = screen.getByText("Tích lũy toàn bộ").closest("article")!;
+    const goalRow = within(goalsCard).getAllByText("Vàng")[0]!.closest("tr")!;
+    expect(within(goalRow).getAllByText("6,000,000đ")).toHaveLength(2);
+    expect(within(goalRow).queryByText("3,000,000đ")).not.toBeInTheDocument();
+    expect(within(goalRow).getByText("60%")).toBeInTheDocument();
+    expect(within(goalRow).getByText("30%")).toBeInTheDocument();
   });
 
   it("chỉ tải overview một lần khi đổi kỳ đã tồn tại", async () => {
@@ -183,6 +241,9 @@ describe("FundsPage", () => {
         yearAmounts: new Array(12).fill(0),
         yearTotal: 0,
         allTimeTotal: 0,
+        monthCurrentValue: 0,
+        yearCurrentValue: 0,
+        allTimeCurrentValue: 0,
         contributionAmount: 0,
         contributionCount: 0,
       }],
@@ -208,6 +269,12 @@ describe("FundsPage", () => {
     const dialog = await screen.findByRole("dialog", { name: /Vàng/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "+ Thêm giao dịch" }));
     const card = dialog.querySelector<HTMLElement>(".asset-lot-card")!;
+
+    const quantity = within(card).getByLabelText("Số chỉ vàng 1");
+    fireEvent.change(quantity, { target: { value: "1" } });
+    fireEvent.blur(quantity);
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Lưu$/ }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Giao dịch vàng #1 cần có giá vốn");
 
     fireEvent.click(within(card).getByRole("radio", { name: "Tổng tiền đã trả" }));
     expect(within(card).getByLabelText("Tổng tiền đã trả vàng 1")).toBeInTheDocument();

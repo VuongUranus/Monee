@@ -578,20 +578,24 @@ export function recalculateMarketFunds(store: FinanceStore): void {
         const detail = data.details[fund.id]?.[month];
         if (!detail) continue;
         if (category === "gold" && detail.type === "gold") {
-          const value = detail.lots.reduce((sum, lot) => sum + lot.chi * goldLotPriceVnd(store, lot), 0);
-          if (value > 0) data.funds[fund.id]![month] = Math.round(value);
+          const hasGold = detail.lots.some((lot) => lot.chi > 0);
+          const complete = detail.lots.every((lot) => lot.chi <= 0 || goldLotCostVnd(lot) > 0);
+          if (hasGold && complete) {
+            data.funds[fund.id]![month] = Math.round(detail.lots.reduce((sum, lot) => sum + goldLotCostVnd(lot), 0));
+          }
         } else if ((category === "stock" || category === "crypto") && detail.type === "hold") {
-          let value = 0;
+          let cost = 0;
           let complete = true;
           let hasQuantity = false;
           for (const lot of detail.lots) {
             if (!(lot.qty > 0)) continue;
             hasQuantity = true;
-            const price = currentLotPriceVnd(store, lot, category);
-            if (!(price > 0)) complete = false;
-            else value += lot.qty * price;
+            if (!(Number(lot.purchasePrice) > 0) || (category === "crypto" && !(Number(lot.purchaseFxVnd) > 0))) {
+              complete = false;
+            }
+            cost += holdingCostVnd(lot, category);
           }
-          if (hasQuantity && complete) data.funds[fund.id]![month] = Math.round(value);
+          if (hasQuantity && complete) data.funds[fund.id]![month] = Math.round(cost);
         }
       }
     }

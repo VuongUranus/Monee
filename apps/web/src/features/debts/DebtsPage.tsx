@@ -52,7 +52,8 @@ export function DebtsPage() {
   }), [dueDate, filter, overview, statusFilter]);
   const selected = selectedId ? details[selectedId] : null;
   const summary = overview?.summary ?? { liabilities: 0, receivables: 0, netDebt: 0, overdueCount: 0, dueSoonCount: 0 };
-  const assets = (fundOverview?.funds ?? []).reduce((total, fund) => total + fund.allTimeTotal + fund.openingBalance, 0);
+  const assets = (fundOverview?.funds ?? []).reduce((total, fund) =>
+    total + fund.allTimeCurrentValue + fund.openingBalance, 0);
   const netWorth = assets + summary.receivables - summary.liabilities;
 
   if (!overview && (debtsState === "loading" || debtsState === "error")) {

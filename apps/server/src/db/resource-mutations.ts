@@ -206,106 +206,6 @@ async function financePreferences(tx: Executor, userId: string): Promise<Finance
   };
 }
 
-async function recalculateMarketFundMonths(tx: Executor, userId: string): Promise<void> {
-  await tx.execute(sql`
-    with gold_values as (
-      select
-        fm.id,
-        round(sum(
-          gl.chi * coalesce(
-            nullif((select mgq.vnd_per_chi from market_gold_quotes mgq where mgq.user_id = ${userId}), 0),
-            nullif(gl.manual_price, 0),
-            0
-          )
-        ))::bigint as amount
-      from fund_months fm
-      join funds f on f.id = fm.fund_id
-      join fund_month_details fmd on fmd.fund_month_id = fm.id and fmd.type = 'gold'
-      join gold_lots gl on gl.detail_id = fmd.id
-      where f.owner_id = ${userId} and f.shared = false and f.category = 'gold'
-      group by fm.id
-      having sum(
-        gl.chi * coalesce(
-          nullif((select mgq.vnd_per_chi from market_gold_quotes mgq where mgq.user_id = ${userId}), 0),
-          nullif(gl.manual_price, 0),
-          0
-        )
-      ) > 0
-    ),
-    holding_prices as (
-      select
-        fm.id as fund_month_id,
-        hl.quantity,
-        case
-          when f.category = 'stock' then coalesce(
-            (
-              select msq.price_vnd
-              from market_stock_quotes msq
-              where msq.user_id = ${userId}
-                and upper(msq.symbol) = upper(trim(hl.ticker))
-              order by
-                case when hl.exchange is not null and msq.exchange = hl.exchange then 0 else 1 end,
-                msq.fetched_at desc
-              limit 1
-            ),
-            nullif(hl.manual_price, 0),
-            (select lp.price from legacy_prices lp where lp.user_id = ${userId} and upper(lp.symbol) = upper(trim(hl.ticker))),
-            0
-          )
-          else coalesce(
-            (
-              select mcq.price_usd
-              from market_crypto_quotes mcq
-              where mcq.user_id = ${userId}
-                and mcq.provider_id = coalesce(
-                  hl.provider_id,
-                  (
-                    select mcs.provider_id
-                    from market_crypto_symbols mcs
-                    where mcs.user_id = ${userId} and upper(mcs.symbol) = upper(trim(hl.ticker))
-                    limit 1
-                  )
-                )
-              limit 1
-            ),
-            nullif(hl.manual_price, 0),
-            (select lp.price from legacy_prices lp where lp.user_id = ${userId} and upper(lp.symbol) = upper(trim(hl.ticker))),
-            0
-          ) * coalesce(
-            nullif((select mfq.usd_vnd from market_fx_quotes mfq where mfq.user_id = ${userId}), 0),
-            nullif((select us.legacy_usd_rate from user_settings us where us.user_id = ${userId}), 0),
-            0
-          )
-        end as price_vnd
-      from fund_months fm
-      join funds f on f.id = fm.fund_id
-      join fund_month_details fmd on fmd.fund_month_id = fm.id and fmd.type = 'hold'
-      join holding_lots hl on hl.detail_id = fmd.id
-      where f.owner_id = ${userId}
-        and f.shared = false
-        and f.category in ('stock', 'crypto')
-    ),
-    holding_values as (
-      select
-        fund_month_id as id,
-        round(sum(case when quantity > 0 then quantity * price_vnd else 0 end))::bigint as amount
-      from holding_prices
-      group by fund_month_id
-      having bool_or(quantity > 0)
-        and bool_and(case when quantity > 0 then price_vnd > 0 else true end)
-    ),
-    asset_values as (
-      select id, amount from gold_values
-      union all
-      select id, amount from holding_values
-    )
-    update fund_months fm
-    set amount = asset_values.amount
-    from asset_values
-    where fm.id = asset_values.id
-  `);
-}
-
 async function runCommand(
   tx: Executor,
   userId: string,
@@ -1069,22 +969,9 @@ async function runCommand(
         target: schema.marketStates.userId,
         set: { updatedAt: new Date(quotes.fetchedAt) },
       });
-      await recalculateMarketFundMonths(tx, userId);
-      const affected = await tx.select({
-        year: schema.fundMonths.year,
-        month: schema.fundMonths.month,
-      }).from(schema.fundMonths)
-        .innerJoin(schema.funds, eq(schema.fundMonths.fundId, schema.funds.id))
-        .where(and(
-          eq(schema.funds.ownerId, userId),
-          eq(schema.funds.shared, false),
-          inArray(schema.funds.category, ["gold", "stock", "crypto"]),
-        ))
-        .groupBy(schema.fundMonths.year, schema.fundMonths.month);
       return {
         quotes,
-        affectedPeriods: affected.map((entry) =>
-          `${entry.year}-${String(entry.month).padStart(2, "0")}`),
+        affectedPeriods: [],
       };
     }
   }

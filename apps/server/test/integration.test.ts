@@ -9,7 +9,7 @@ import type {
   UserProfile,
 } from "@chi-tieu/shared";
 import { createDefaultStore } from "@chi-tieu/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/application.js";
@@ -875,8 +875,18 @@ describe("Fastify CRUD, sharing và market routes", () => {
     let received: unknown;
     const response: MarketQuotesResponse = {
       fetchedAt: new Date(0).toISOString(),
-      fx: null,
-      gold: null,
+      fx: {
+        usdVnd: 25_000,
+        source: "fixture",
+        fetchedAt: new Date(0).toISOString(),
+      },
+      gold: {
+        symbol: "XAU",
+        xauUsdPerTroyOunce: 2_500,
+        vndPerChi: 6_000_000,
+        source: "fixture",
+        fetchedAt: new Date(0).toISOString(),
+      },
       stocks: [{
         exchange: "HOSE",
         symbol: "VNM",
@@ -884,7 +894,14 @@ describe("Fastify CRUD, sharing và market routes", () => {
         source: "fixture",
         fetchedAt: new Date(0).toISOString(),
       }],
-      crypto: [],
+      crypto: [{
+        symbol: "BTC",
+        providerId: "btc-bitcoin",
+        name: "Bitcoin",
+        priceUsd: 40_000,
+        source: "fixture",
+        fetchedAt: new Date(0).toISOString(),
+      }],
       matches: {},
       errors: [{ key: "HOSE:VNM", code: "upstream", message: "Nguồn giá tạm thời lỗi." }],
     };
@@ -898,10 +915,29 @@ describe("Fastify CRUD, sharing và market routes", () => {
       },
     };
     const initialData = createDefaultStore();
-    initialData.years["2026"]!.funds.dt![6] = 720_000;
+    initialData.years["2026"]!.funds.dp![6] = 2_000_000;
+    initialData.years["2026"]!.funds.dt![6] = 665_000;
     initialData.years["2026"]!.details.dt![6] = {
       type: "hold",
-      lots: [{ ticker: "VNM", exchange: "HOSE", qty: 10, manualPrice: 72_000 }],
+      lots: [{ ticker: "VNM", exchange: "HOSE", qty: 10, manualPrice: 72_000, purchasePrice: 65_000, feeVnd: 15_000 }],
+    };
+    initialData.years["2026"]!.funds.vang![6] = 6_000_000;
+    initialData.years["2026"]!.details.vang![6] = {
+      type: "gold",
+      lots: [{ chi: 2, manualPrice: 5_000_000, costBasis: { type: "unit_price", vndPerChi: 3_000_000 } }],
+    };
+    initialData.years["2026"]!.funds.cr![6] = 4_025_000;
+    initialData.years["2026"]!.details.cr![6] = {
+      type: "hold",
+      lots: [{
+        ticker: "BTC",
+        providerId: "btc-bitcoin",
+        qty: 0.01,
+        manualPrice: 35_000,
+        purchasePrice: 20_000,
+        purchaseFxVnd: 20_000,
+        feeVnd: 25_000,
+      }],
     };
     const { app, cookie } = await createAuthenticatedApp({
       initialData: initialData as unknown as StoredFinancePayload,
@@ -909,7 +945,14 @@ describe("Fastify CRUD, sharing và market routes", () => {
     });
     try {
       const initial = (await app.inject({ method: "GET", url: "/api/data", headers: { cookie } })).json();
-      const quoteRequest = { assets: [{ type: "stock" as const, symbol: "VNM", exchange: "HOSE" }], force: true };
+      const quoteRequest = {
+        assets: [
+          { type: "stock" as const, symbol: "VNM", exchange: "HOSE" },
+          { type: "gold" as const },
+          { type: "crypto" as const, symbol: "BTC", providerId: "btc-bitcoin" },
+        ],
+        force: true,
+      };
       const result = await app.inject({
         method: "POST",
         url: "/api/market/quotes",
@@ -921,13 +964,67 @@ describe("Fastify CRUD, sharing và market routes", () => {
       expect(received).toEqual(quoteRequest);
       expect(result.json().quotes).toEqual(response);
       expect(result.json().workspaceRevision).toBe(initial.workspaceRevision + 1);
-      expect(result.json().affectedPeriods).toContain("2026-07");
+      expect(result.json().affectedPeriods).toEqual([]);
       const detail = (await app.inject({
         method: "GET",
         url: "/api/funds/dt/months/2026/7",
         headers: { cookie },
       })).json();
-      expect(detail.amount).toBe(800_000);
+      expect(detail.amount).toBe(665_000);
+      const overview = (await app.inject({
+        method: "GET",
+        url: "/api/funds/overview?year=2026&month=7",
+        headers: { cookie },
+      })).json();
+      expect(overview.funds).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "dp",
+          monthAmount: 2_000_000,
+          monthCurrentValue: 2_000_000,
+          yearCurrentValue: 2_000_000,
+          allTimeCurrentValue: 2_000_000,
+        }),
+        expect.objectContaining({ id: "dt", monthAmount: 665_000, monthCurrentValue: 800_000 }),
+        expect.objectContaining({ id: "vang", monthAmount: 6_000_000, monthCurrentValue: 12_000_000 }),
+        expect.objectContaining({ id: "cr", monthAmount: 4_025_000, monthCurrentValue: 10_000_000 }),
+      ]));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("hiệu chỉnh số dư đầu tư cũ theo giá vốn mà không đoán giao dịch thiếu dữ liệu", async () => {
+    const initialData = createDefaultStore();
+    initialData.years["2026"]!.funds.dt![6] = 800_000;
+    initialData.years["2026"]!.details.dt![6] = {
+      type: "hold",
+      lots: [{ ticker: "VNM", exchange: "HOSE", qty: 10, manualPrice: 80_000, purchasePrice: 65_000, feeVnd: 15_000 }],
+    };
+    initialData.years["2026"]!.funds.cr![6] = 90_000_000;
+    initialData.years["2026"]!.details.cr![6] = {
+      type: "hold",
+      lots: [{ ticker: "BTC", qty: 0.1, manualPrice: 3_000, purchasePrice: 2_500 }],
+    };
+    const { app, cookie } = await createAuthenticatedApp({ initialData: initialData as unknown as StoredFinancePayload });
+    try {
+      const migration = await fs.readFile(
+        new URL("../drizzle/0008_backfill_investment_cost_amounts.sql", import.meta.url),
+        "utf8",
+      );
+      await postgres.client.db.execute(sql.raw(migration));
+
+      const corrected = (await app.inject({
+        method: "GET",
+        url: "/api/funds/dt/months/2026/7",
+        headers: { cookie },
+      })).json();
+      const incomplete = (await app.inject({
+        method: "GET",
+        url: "/api/funds/cr/months/2026/7",
+        headers: { cookie },
+      })).json();
+      expect(corrected.amount).toBe(665_000);
+      expect(incomplete.amount).toBe(90_000_000);
     } finally {
       await app.close();
     }

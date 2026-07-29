@@ -186,7 +186,10 @@ describe("nghiệp vụ sổ tài chính", () => {
 
   it("thu thập, trộn và quy đổi dữ liệu thị trường", () => {
     const store = createDefaultStore();
-    store.years["2026"]!.details.cr![0] = { type: "hold", lots: [{ ticker: "BTC", qty: 0.1, providerId: "btc-bitcoin" }] };
+    store.years["2026"]!.details.cr![0] = {
+      type: "hold",
+      lots: [{ ticker: "BTC", qty: 0.1, providerId: "btc-bitcoin", purchasePrice: 50_000, purchaseFxVnd: 24_000 }],
+    };
     expect(collectMarketAssets(store)).toContainEqual({ type: "crypto", symbol: "BTC", providerId: "btc-bitcoin" });
     const response: MarketQuotesResponse = {
       fetchedAt: "2026-07-25T00:00:00.000Z",
@@ -199,7 +202,7 @@ describe("nghiệp vụ sổ tài chính", () => {
     };
     mergeMarketResponse(store, response);
     recalculateMarketFunds(store);
-    expect(totalFundsForMonth(store, 2026, 0)).toBe(150_000_000);
+    expect(totalFundsForMonth(store, 2026, 0)).toBe(120_000_000);
   });
 
   it("tính vốn và giá trị hiện tại theo giá tự động hoặc giá thủ công", () => {
