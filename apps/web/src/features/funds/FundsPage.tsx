@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CryptoMatch,
   Fund,
@@ -18,6 +18,7 @@ import type {
 import { api } from "@/lib/api";
 import { DonutChart } from "@/components/Charts";
 import { AsyncButton } from "@/components/AsyncButton";
+import { DecimalInput } from "@/components/DecimalInput";
 import { Modal } from "@/components/Modal";
 import { MoneyInput } from "@/components/MoneyInput";
 import { ResourceStatus } from "@/components/ResourceStatus";
@@ -195,7 +196,7 @@ export function FundsPage() {
       <ResourceStatus state={fundsState} hasData={Boolean(fundOverview)} label="dữ liệu quỹ" onRetry={() => void loadFunds(true)} />
       <div className="toolbar">
         <button className="btn sm" type="button" onClick={() => setManaging(true)}>⚙ Quản lý quỹ</button>
-        <AsyncButton className="btn sm" disabled={marketState === "loading"} busyLabel="Đang cập nhật…" onAction={() => refreshMarket(true)}>↻ Cập nhật giá</AsyncButton>
+        <AsyncButton className="btn sm" disabled={marketState === "loading"} busyLabel="Đang cập nhật…" onAction={() => refreshMarket({ force: true })}>↻ Cập nhật giá</AsyncButton>
         <span className={`market-status ${marketState === "error" ? "error" : ""}`}>{marketMessage}</span>
         <span className="spacer" />
         <AsyncButton className="btn sm danger" busyLabel="Đang xóa…" onAction={resetMonth}>Xóa tháng này</AsyncButton>
@@ -807,6 +808,20 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
   });
   const [cryptoMatches, setCryptoMatches] = useState<Record<number, CryptoMatch[]>>({});
   const [lookupMessage, setLookupMessage] = useState<Record<number, string>>({});
+  type GoldCostMode = NonNullable<GoldLot["costBasis"]>["type"];
+  type GoldLookupState = { status: "idle" | "loading" | "ready" | "error"; message: string };
+  const [goldCostModes, setGoldCostModes] = useState<GoldCostMode[]>(() =>
+    existing?.type === "gold"
+      ? existing.lots.map((lot) => lot.costBasis?.type ?? "unit_price")
+      : []);
+  const [goldLookupStates, setGoldLookupStates] = useState<Record<number, GoldLookupState>>({});
+  const goldLookupControllers = useRef(new Map<number, AbortController>());
+  const goldLookupSequences = useRef<Record<number, number>>({});
+
+  useEffect(() => () => {
+    for (const controller of goldLookupControllers.current.values()) controller.abort();
+    goldLookupControllers.current.clear();
+  }, []);
 
   const defaultHoldingLot = (): HoldingLot => ({
     ticker: "",
@@ -817,7 +832,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
     feeVnd: null,
     ...(category === "stock" ? { exchange: "HOSE" } : {}),
   });
-  const defaultGoldLot = (): GoldLot => ({ chi: 0, manualPrice: null, purchasePrice: null, feeVnd: null });
+  const defaultGoldLot = (): GoldLot => ({ chi: 0, manualPrice: null, costBasis: null });
 
   const save = async (): Promise<void> => {
     let savedAmount = 0;
@@ -825,7 +840,7 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
     const recipe = (draft: any): void => {
       const target = draft.years[String(year)]!;
       if (detail?.type === "gold") {
-        const lots = detail.lots.filter((lot) => lot.chi > 0 || lot.purchasePrice || lot.manualPrice || lot.feeVnd || lot.note?.trim());
+        const lots = detail.lots.filter((lot) => lot.chi > 0 || lot.costBasis || lot.manualPrice || lot.note?.trim());
         const next: GoldDetail = { type: "gold", lots: structuredClone(lots) };
         target.details[fundId]![month] = next;
         target.funds[fundId]![month] = Math.round(lots.reduce((sum, lot) => sum + lot.chi * goldLotPriceVnd(draft as any, lot), 0));
@@ -921,11 +936,127 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
       : ledger.market.fx ? `Crypto quy đổi theo USD/VND ${fmtNumber(ledger.market.fx.usdVnd)}` : "Chưa có tỷ giá USD/VND";
 
   const updateGoldLot = (index: number, patch: Partial<GoldLot>): void => {
-    if (!gold) return;
-    setDetail({ ...gold, lots: gold.lots.map((lot, lotIndex) => lotIndex === index ? { ...lot, ...patch } : lot) });
+    setDetail((current) => {
+      if (current?.type !== "gold") return current;
+      return {
+        ...current,
+        lots: current.lots.map((lot, lotIndex) => lotIndex === index ? { ...lot, ...patch } : lot),
+      };
+    });
+  };
+  const cancelHistoricalLookup = (index: number): void => {
+    goldLookupControllers.current.get(index)?.abort();
+    goldLookupControllers.current.delete(index);
+    goldLookupSequences.current[index] = (goldLookupSequences.current[index] ?? 0) + 1;
+  };
+  const lookupHistoricalGold = async (index: number, date: string): Promise<void> => {
+    cancelHistoricalLookup(index);
+    const sequence = goldLookupSequences.current[index]!;
+    const controller = new AbortController();
+    goldLookupControllers.current.set(index, controller);
+    setGoldLookupStates((current) => ({
+      ...current,
+      [index]: { status: "loading", message: "Đang lấy giá XAU/VND theo ngày…" },
+    }));
+    try {
+      const quote = await api.historicalGoldQuote(date, controller.signal);
+      if (goldLookupSequences.current[index] !== sequence) return;
+      setDetail((current) => {
+        if (current?.type !== "gold") return current;
+        const lot = current.lots[index];
+        if (!lot || lot.purchasedAt !== date) return current;
+        return {
+          ...current,
+          lots: current.lots.map((item, lotIndex) => lotIndex === index ? {
+            ...item,
+            costBasis: {
+              type: "historical" as const,
+              vndPerChi: quote.vndPerChi,
+              quoteDate: quote.date,
+              source: quote.source,
+            },
+          } : item),
+        };
+      });
+      setGoldLookupStates((current) => ({
+        ...current,
+        [index]: {
+          status: "ready",
+          message: `${quote.source} · giá XAU/VND tham chiếu, không phải giá SJC`,
+        },
+      }));
+    } catch (error) {
+      if (controller.signal.aborted || goldLookupSequences.current[index] !== sequence) return;
+      setGoldLookupStates((current) => ({
+        ...current,
+        [index]: {
+          status: "error",
+          message: error instanceof Error ? error.message : "Không lấy được giá vàng theo ngày.",
+        },
+      }));
+    } finally {
+      if (goldLookupControllers.current.get(index) === controller) {
+        goldLookupControllers.current.delete(index);
+      }
+    }
+  };
+  const changeGoldCostMode = (index: number, mode: GoldCostMode): void => {
+    cancelHistoricalLookup(index);
+    setGoldCostModes((current) => current.map((item, itemIndex) => itemIndex === index ? mode : item));
+    updateGoldLot(index, { costBasis: null });
+    if (mode !== "historical") {
+      setGoldLookupStates((current) => {
+        const next = { ...current };
+        delete next[index];
+        return next;
+      });
+      return;
+    }
+    const date = gold?.lots[index]?.purchasedAt ?? "";
+    if (date) void lookupHistoricalGold(index, date);
+    else {
+      setGoldLookupStates((current) => ({
+        ...current,
+        [index]: { status: "idle", message: "Chọn ngày mua để lấy giá tham chiếu." },
+      }));
+    }
+  };
+  const changeGoldPurchaseDate = (index: number, date: string): void => {
+    setDetail((current) => {
+      if (current?.type !== "gold") return current;
+      return {
+        ...current,
+        lots: current.lots.map((lot, lotIndex) => {
+          if (lotIndex !== index) return lot;
+          const next = {
+            ...lot,
+            ...(goldCostModes[index] === "historical" ? { costBasis: null } : {}),
+          };
+          if (date) next.purchasedAt = date;
+          else delete next.purchasedAt;
+          return next;
+        }),
+      };
+    });
+    if (goldCostModes[index] !== "historical") return;
+    if (date) void lookupHistoricalGold(index, date);
+    else {
+      cancelHistoricalLookup(index);
+      setGoldLookupStates((current) => ({
+        ...current,
+        [index]: { status: "idle", message: "Chọn ngày mua để lấy giá tham chiếu." },
+      }));
+    }
   };
   const removeGoldLot = (index: number): void => {
-    if (gold) setDetail({ ...gold, lots: gold.lots.filter((_, lotIndex) => lotIndex !== index) });
+    for (const controller of goldLookupControllers.current.values()) controller.abort();
+    goldLookupControllers.current.clear();
+    goldLookupSequences.current = {};
+    setGoldLookupStates({});
+    setGoldCostModes((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setDetail((current) => current?.type === "gold"
+      ? { ...current, lots: current.lots.filter((_, lotIndex) => lotIndex !== index) }
+      : current);
   };
 
   return (
@@ -945,16 +1076,88 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
           {gold?.lots.map((lot, index) => {
             const value = lot.chi * goldLotPriceVnd(ledger, lot);
             const cost = goldLotCostVnd(lot);
+            const costMode = goldCostModes[index] ?? lot.costBasis?.type ?? "unit_price";
+            const historical = lot.costBasis?.type === "historical" ? lot.costBasis : null;
+            const lookupState = goldLookupStates[index];
             return <article className="asset-lot-card" key={index}>
               <div className="asset-lot-heading"><b>Giao dịch vàng #{index + 1}</b><button className="tx-del" type="button" aria-label={`Xóa giao dịch vàng ${index + 1}`} onClick={() => removeGoldLot(index)}>×</button></div>
-              <div className="asset-fields">
-                <label>Số chỉ<input type="number" min="0" step="0.01" value={lot.chi || ""} onChange={(event) => updateGoldLot(index, { chi: Number(event.target.value) || 0 })} /></label>
-                <label>Giá mua (VND/chỉ)<MoneyInput value={lot.purchasePrice ?? 0} ariaLabel={`Giá mua vàng ${index + 1}`} onCommit={(value) => updateGoldLot(index, { purchasePrice: value })} /></label>
-                <label>Giá thị trường thủ công (VND/chỉ)<MoneyInput value={lot.manualPrice ?? 0} ariaLabel={`Giá thủ công vàng ${index + 1}`} onCommit={(value) => updateGoldLot(index, { manualPrice: value })} /></label>
-                <label>Phí (VND)<MoneyInput value={lot.feeVnd ?? 0} ariaLabel={`Phí vàng ${index + 1}`} onCommit={(value) => updateGoldLot(index, { feeVnd: value })} /></label>
-                <label>Ngày mua<input type="date" value={lot.purchasedAt ?? ""} onChange={(event) => updateGoldLot(index, { purchasedAt: event.target.value })} /></label>
+              <div className="asset-fields gold-asset-fields">
+                <label>Số chỉ<DecimalInput value={lot.chi} ariaLabel={`Số chỉ vàng ${index + 1}`} onCommit={(chi) => updateGoldLot(index, { chi })} /></label>
+                <label>Ngày mua<input aria-label={`Ngày mua vàng ${index + 1}`} type="date" value={lot.purchasedAt ?? ""} onChange={(event) => changeGoldPurchaseDate(index, event.target.value)} /></label>
+                <fieldset className="gold-cost-method">
+                  <legend>Cách tính vốn</legend>
+                  <div className="gold-cost-options">
+                    {([
+                      ["unit_price", "Giá mua/chỉ"],
+                      ["total_paid", "Tổng tiền đã trả"],
+                      ["historical", "Tự động theo ngày mua"],
+                    ] as const).map(([mode, label]) => (
+                      <label key={mode}>
+                        <input
+                          type="radio"
+                          name={`gold-cost-${index}`}
+                          value={mode}
+                          checked={costMode === mode}
+                          onChange={() => changeGoldCostMode(index, mode)}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                {costMode === "unit_price" ? (
+                  <label>Giá mua (VND/chỉ)
+                    <MoneyInput
+                      value={lot.costBasis?.type === "unit_price" ? lot.costBasis.vndPerChi : 0}
+                      ariaLabel={`Giá mua vàng ${index + 1}`}
+                      onCommit={(vndPerChi) => updateGoldLot(index, {
+                        costBasis: vndPerChi > 0 ? { type: "unit_price", vndPerChi } : null,
+                      })}
+                    />
+                  </label>
+                ) : null}
+                {costMode === "total_paid" ? (
+                  <label>Tổng tiền đã trả (VND)
+                    <MoneyInput
+                      value={lot.costBasis?.type === "total_paid" ? lot.costBasis.totalVnd : 0}
+                      ariaLabel={`Tổng tiền đã trả vàng ${index + 1}`}
+                      onCommit={(totalVnd) => updateGoldLot(index, {
+                        costBasis: totalVnd > 0 ? { type: "total_paid", totalVnd } : null,
+                      })}
+                    />
+                  </label>
+                ) : null}
+                {costMode === "historical" ? (
+                  <div className="gold-history-field">
+                    <label>Giá tham chiếu (VND/chỉ)
+                      <input
+                        aria-label={`Giá vàng theo ngày ${index + 1}`}
+                        readOnly
+                        value={historical ? `${fmtNumber(historical.vndPerChi)}đ` : ""}
+                        placeholder="Chọn ngày mua để lấy giá"
+                      />
+                    </label>
+                    <button
+                      className="btn sm"
+                      type="button"
+                      disabled={!lot.purchasedAt || lookupState?.status === "loading"}
+                      onClick={() => lot.purchasedAt && void lookupHistoricalGold(index, lot.purchasedAt)}
+                    >
+                      {lookupState?.status === "loading" ? "Đang lấy giá…" : "Lấy lại giá"}
+                    </button>
+                    <span className={lookupState?.status === "error" ? "asset-quote-warning" : "hint"} role="status">
+                      {lookupState?.message ?? (historical ? `${historical.source} · giá XAU/VND tham chiếu, không phải giá SJC` : "Chọn ngày mua để lấy giá tham chiếu.")}
+                    </span>
+                  </div>
+                ) : null}
                 <label className="asset-note">Ghi chú<input value={lot.note ?? ""} onChange={(event) => updateGoldLot(index, { note: event.target.value })} /></label>
               </div>
+              <details className="gold-manual-price">
+                <summary>Giá hiện tại thủ công (dự phòng)</summary>
+                <label>Giá thị trường thủ công (VND/chỉ)
+                  <MoneyInput value={lot.manualPrice ?? 0} ariaLabel={`Giá thủ công vàng ${index + 1}`} onCommit={(manualPrice) => updateGoldLot(index, { manualPrice })} />
+                </label>
+              </details>
               <LotMetrics value={value} cost={cost} />
             </article>;
           })}
@@ -981,8 +1184,15 @@ function FundDetailEditor({ fundId, onClose }: { fundId: string; onClose(): void
             </article>;
           })}
         </div>
-        <button className="btn sm asset-add" type="button" onClick={() => gold ? setDetail({ ...gold, lots: [...gold.lots, defaultGoldLot()] }) : holding ? setDetail({ ...holding, lots: [...holding.lots, defaultHoldingLot()] }) : undefined}>+ Thêm giao dịch</button>
-        <p className="hint">Giá tự động được ưu tiên; giá thị trường thủ công là phương án dự phòng khi nguồn chưa có dữ liệu. Phí chỉ dùng để tính vốn và lãi/lỗ.</p>
+        <button className="btn sm asset-add" type="button" onClick={() => {
+          if (gold) {
+            setDetail({ ...gold, lots: [...gold.lots, defaultGoldLot()] });
+            setGoldCostModes((current) => [...current, "unit_price"]);
+          } else if (holding) {
+            setDetail({ ...holding, lots: [...holding.lots, defaultHoldingLot()] });
+          }
+        }}>+ Thêm giao dịch</button>
+        <p className="hint">Mỗi giao dịch dùng một cách tính vốn. “Tổng tiền đã trả” đã gồm mọi phí; giá theo ngày là XAU/VND tham chiếu, không phải giá bán lẻ SJC.</p>
       </fieldset>
     </Modal>
   );

@@ -92,7 +92,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     },
   }) as UserDataRepository;
   const sessions = new SessionManager({ config, db: database, now, randomBytes });
-  const marketService = options.marketService ?? createMarketService({ fetchImpl, now });
+  const marketService = options.marketService ?? createMarketService({
+    fetchImpl,
+    now,
+    timeZone: config.appTimeZone,
+  });
   const assistantService = options.assistantService !== undefined
     ? options.assistantService
     : config.assistantConfigured

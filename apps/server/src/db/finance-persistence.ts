@@ -17,6 +17,7 @@ import {
   createDefaultStore,
   normalizeStore,
 } from "@chi-tieu/shared";
+import { readGoldCostBasis, writeGoldCostBasis } from "./gold-cost-basis.js";
 import * as schema from "./schema.js";
 
 type Executor = any;
@@ -70,8 +71,7 @@ export async function insertFundMonths(
           position,
           chi: Number(lot.chi) || 0,
           manualPrice: lot.manualPrice ?? null,
-          purchasePrice: lot.purchasePrice ?? null,
-          feeVnd: lot.feeVnd ?? null,
+          ...writeGoldCostBasis(lot),
           purchasedAt: lot.purchasedAt || null,
           note: lot.note ?? null,
         })));
@@ -267,8 +267,7 @@ async function replaceFundMonthDetails(
         position,
         chi: Number(lot.chi) || 0,
         manualPrice: lot.manualPrice ?? null,
-        purchasePrice: lot.purchasePrice ?? null,
-        feeVnd: lot.feeVnd ?? null,
+        ...writeGoldCostBasis(lot),
         purchasedAt: lot.purchasedAt || null,
         note: lot.note ?? null,
       }));
@@ -1129,8 +1128,7 @@ async function assembleFundDetails(db: Executor, internalIds: string[]): Promise
         lots: gold.filter((lot: typeof schema.goldLots.$inferSelect) => lot.detailId === detail.id).map((lot: typeof schema.goldLots.$inferSelect) => ({
           chi: lot.chi,
           manualPrice: lot.manualPrice,
-          purchasePrice: lot.purchasePrice,
-          feeVnd: lot.feeVnd,
+          costBasis: readGoldCostBasis(lot),
           ...(lot.purchasedAt ? { purchasedAt: lot.purchasedAt } : {}),
           ...(lot.note !== null ? { note: lot.note } : {}),
         })),

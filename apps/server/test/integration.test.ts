@@ -893,6 +893,9 @@ describe("Fastify CRUD, sharing và market routes", () => {
         received = request;
         return response;
       },
+      async getHistoricalGoldQuote() {
+        throw new Error("not_used");
+      },
     };
     const initialData = createDefaultStore();
     initialData.years["2026"]!.funds.dt![6] = 720_000;
@@ -925,6 +928,62 @@ describe("Fastify CRUD, sharing và market routes", () => {
         headers: { cookie },
       })).json();
       expect(detail.amount).toBe(800_000);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("tra giá vàng lịch sử yêu cầu đăng nhập và trả lỗi ngày rõ ràng", async () => {
+    const received: string[] = [];
+    const marketService: MarketService = {
+      async getQuotes() {
+        return {
+          fetchedAt: new Date(0).toISOString(),
+          fx: null,
+          gold: null,
+          stocks: [],
+          crypto: [],
+          matches: {},
+          errors: [],
+        };
+      },
+      async getHistoricalGoldQuote(date) {
+        received.push(date);
+        if (date === "invalid") {
+          throw Object.assign(new Error("Ngày mua không hợp lệ."), { code: "invalid_historical_date" });
+        }
+        return {
+          date,
+          vndPerTroyOunce: 60_981_087,
+          vndPerChi: 7_352_203,
+          source: "Frankfurter",
+          sourceUrl: "https://frankfurter.dev",
+        };
+      },
+    };
+    const { app, cookie } = await createAuthenticatedApp({ marketService });
+    try {
+      expect((await app.inject({
+        method: "GET",
+        url: "/api/market/gold/history?date=2024-07-15",
+      })).statusCode).toBe(401);
+
+      const success = await app.inject({
+        method: "GET",
+        url: "/api/market/gold/history?date=2024-07-15",
+        headers: { cookie },
+      });
+      expect(success.statusCode).toBe(200);
+      expect(success.json()).toMatchObject({ date: "2024-07-15", vndPerChi: 7_352_203 });
+
+      const invalid = await app.inject({
+        method: "GET",
+        url: "/api/market/gold/history?date=invalid",
+        headers: { cookie },
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({ error: "invalid_historical_date" });
+      expect(received).toEqual(["2024-07-15", "invalid"]);
     } finally {
       await app.close();
     }

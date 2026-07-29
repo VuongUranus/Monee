@@ -12,6 +12,7 @@ import type {
   Transaction,
   YearData,
 } from "./index.js";
+import { legacyGoldCostBasis } from "./gold.js";
 
 export const DEFAULT_INCOME = 22_500_000;
 export const INCOME_RESET_FROM = "2026-08";
@@ -313,8 +314,18 @@ function migrateAssetDetails(store: FinanceStore): boolean {
         } else if (fund.cat === "gold" && detail.type === "gold" && Array.isArray(detail.lots)) {
           for (const lot of detail.lots as any[]) {
             lot.manualPrice ??= null;
-            lot.purchasePrice ??= null;
-            lot.feeVnd ??= null;
+            if (lot.costBasis === undefined) {
+              lot.costBasis = legacyGoldCostBasis(lot.chi, lot.purchasePrice, lot.feeVnd);
+              changed = true;
+            }
+            if ("purchasePrice" in lot) {
+              delete lot.purchasePrice;
+              changed = true;
+            }
+            if ("feeVnd" in lot) {
+              delete lot.feeVnd;
+              changed = true;
+            }
           }
         }
       }

@@ -52,19 +52,47 @@ test("phân bổ quỹ, chi tiết tài sản và sao lưu", async ({ page }, te
   const goldRow = page.locator("tr").filter({ hasText: "Quỹ mua vàng" });
   await goldRow.getByRole("button", { name: /Chỉnh chi tiết/ }).click();
   const goldDialog = page.getByRole("dialog", { name: /Quỹ mua vàng/ });
+  await page.route("**/api/market/gold/history?*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        date: "2024-07-15",
+        vndPerTroyOunce: 60_981_087,
+        vndPerChi: 7_352_203,
+        source: "Frankfurter",
+        sourceUrl: "https://frankfurter.dev",
+      }),
+    });
+  });
   await goldDialog.getByRole("button", { name: "+ Thêm giao dịch" }).click();
   await goldDialog.getByRole("button", { name: "+ Thêm giao dịch" }).click();
-  await goldDialog.getByRole("spinbutton").nth(0).fill("1");
-  await goldDialog.getByRole("spinbutton").nth(1).fill("1");
-  await goldDialog.getByRole("textbox", { name: "Giá thủ công vàng 1" }).fill("7500000");
-  await goldDialog.getByRole("textbox", { name: "Giá thủ công vàng 1" }).blur();
-  await goldDialog.getByRole("textbox", { name: "Giá thủ công vàng 2" }).fill("7500000");
-  await goldDialog.getByRole("textbox", { name: "Giá thủ công vàng 2" }).blur();
+  await goldDialog.getByRole("button", { name: "+ Thêm giao dịch" }).click();
+  await goldDialog.getByRole("textbox", { name: "Số chỉ vàng 1" }).fill("0,1");
+  await goldDialog.getByRole("textbox", { name: "Số chỉ vàng 1" }).blur();
+  await goldDialog.getByRole("textbox", { name: "Số chỉ vàng 2" }).fill("1");
+  await goldDialog.getByRole("textbox", { name: "Số chỉ vàng 2" }).blur();
+  await goldDialog.getByRole("textbox", { name: "Số chỉ vàng 3" }).fill("0.2");
+  await goldDialog.getByRole("textbox", { name: "Số chỉ vàng 3" }).blur();
   await goldDialog.getByRole("textbox", { name: "Giá mua vàng 1" }).fill("7000000");
   await goldDialog.getByRole("textbox", { name: "Giá mua vàng 1" }).blur();
+  const goldCards = goldDialog.locator(".asset-lot-card");
+  await goldCards.nth(1).getByText("Tổng tiền đã trả", { exact: true }).click();
+  await goldDialog.getByRole("textbox", { name: "Tổng tiền đã trả vàng 2" }).fill("7000000");
+  await goldDialog.getByRole("textbox", { name: "Tổng tiền đã trả vàng 2" }).blur();
+  await goldCards.nth(2).getByText("Tự động theo ngày mua", { exact: true }).click();
+  await goldDialog.getByLabel("Ngày mua vàng 3").fill("2024-07-15");
+  await expect(goldDialog.getByLabel("Giá vàng theo ngày 3")).toHaveValue("7,352,203đ");
+  await expect(goldDialog.getByLabel("Tổng quan tài sản")).toContainText("9,170,441đ");
   await goldDialog.getByRole("textbox", { name: "Ghi chú" }).nth(0).fill("Mua vàng kiểm thử");
   await goldDialog.getByRole("button", { name: "Lưu", exact: true }).click();
-  await expect(goldRow).toContainText("15,000,000đ");
+  await goldRow.getByRole("button", { name: /Chỉnh chi tiết/ }).click();
+  const reopenedGoldDialog = page.getByRole("dialog", { name: /Quỹ mua vàng/ });
+  const reopenedCards = reopenedGoldDialog.locator(".asset-lot-card");
+  await expect(reopenedGoldDialog.getByRole("textbox", { name: "Số chỉ vàng 1" })).toHaveValue("0,1");
+  await expect(reopenedCards.nth(1).getByRole("radio", { name: "Tổng tiền đã trả" })).toBeChecked();
+  await expect(reopenedGoldDialog.getByRole("textbox", { name: "Tổng tiền đã trả vàng 2" })).toHaveValue("7,000,000đ");
+  await expect(reopenedCards.nth(2).getByRole("radio", { name: "Tự động theo ngày mua" })).toBeChecked();
+  await reopenedGoldDialog.locator(".manager-footer").getByRole("button", { name: "Đóng", exact: true }).click();
 
   await page.getByRole("button", { name: /Xuất sao lưu/ }).click();
   await expect(page.getByRole("dialog", { name: "Sao lưu dữ liệu" })).toBeVisible();
@@ -104,14 +132,14 @@ test("chuyển tháng năm và CRUD quỹ, danh mục", async ({ page }, testInf
   const initialCategoryCount = await categoryDialog.locator(".manager-row.category-row").count();
   await categoryDialog.getByPlaceholder("Tên danh mục mới").fill("Danh mục kiểm thử");
   await categoryDialog.getByRole("button", { name: "+ Thêm", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Đã lưu");
+  await expect(page.locator(".save-status")).toContainText("Đã lưu");
   const categoryRow = categoryDialog.locator(".manager-row.category-row").last();
   const categoryName = categoryRow.locator("input").nth(1);
   await expect(categoryName).toHaveValue("Danh mục kiểm thử");
   await categoryName.fill("Danh mục đã đổi");
   await categoryName.blur();
   await expect(categoryName).toHaveValue("Danh mục đã đổi");
-  await expect(page.getByRole("status")).toContainText("Đã lưu");
+  await expect(page.locator(".save-status")).toContainText("Đã lưu");
   await categoryRow.getByRole("button", { name: "Xóa" }).click();
   await expect(categoryDialog.locator(".manager-row.category-row")).toHaveCount(initialCategoryCount);
 });
@@ -123,6 +151,7 @@ test("quản lý tài khoản và gán tài khoản cho giao dịch", async ({ p
   await accountDialog.getByRole("button", { name: "Loại tài khoản" }).click();
   await accountDialog.getByPlaceholder("Tên loại tài khoản mới").fill("Ví điện tử");
   await accountDialog.getByRole("button", { name: "+ Thêm", exact: true }).click();
+  await expect(page.locator(".save-status")).toContainText("Đã lưu");
 
   await accountDialog.getByRole("button", { name: "Tài khoản", exact: true }).click();
   await accountDialog.getByPlaceholder("Tên tài khoản mới").fill("VCB kiểm thử");
@@ -131,7 +160,7 @@ test("quản lý tài khoản và gán tài khoản cho giao dịch", async ({ p
   await accountDialog.getByRole("button", { name: "+ Thêm", exact: true }).click();
   const accountName = accountDialog.getByLabel("Tên VCB kiểm thử");
   await expect(accountName).toHaveValue("VCB kiểm thử");
-  await expect(page.getByRole("status")).toContainText("Đã lưu");
+  await expect(page.locator(".save-status")).toContainText("Đã lưu");
   await page.keyboard.press("Escape");
 
   await page.getByRole("combobox", { name: "Tài khoản", exact: true }).click();
@@ -184,7 +213,7 @@ test("holdings cổ phiếu, crypto và biểu đồ mọi năm", async ({ page 
   }
 
   await page.getByRole("link", { name: "Thống kê" }).click();
-  await page.getByRole("combobox", { name: "Phạm vi" }).click();
+  await page.getByRole("combobox", { name: "Phạm vi", exact: true }).click();
   await page.getByRole("option", { name: "Toàn bộ các năm", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Diễn biến tích lũy — Toàn bộ các năm" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Thống kê thu chi — Toàn bộ các năm" })).toBeVisible();
@@ -216,7 +245,8 @@ test("xuất file và nhập lại bản sao lưu", async ({ page }, testInfo) =
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(backup)),
   });
-  await expect.poll(() => acceptedDialogs).toBe(2);
+  await expect.poll(() => acceptedDialogs).toBe(1);
+  await expect(page.locator(".save-status")).toContainText("Đã nhập dữ liệu.");
   await expect(page.getByRole("textbox", { name: "Ghi chú tháng" })).toHaveValue("Đã khôi phục từ E2E");
 });
 

@@ -39,6 +39,10 @@ import {
 export type AuthState = "checking" | "anonymous" | "authenticated" | "error";
 export type SaveState = "idle" | "loading" | "saving" | "saved" | "error";
 export type ResourceState = "idle" | "loading" | "ready" | "error";
+export interface RefreshMarketOptions {
+  force?: boolean;
+  notifySuccess?: boolean;
+}
 type RefreshPolicy = "route" | "none";
 
 interface MutationOptions<T> {
@@ -117,7 +121,7 @@ interface FinanceState {
   deleteSharedFund(fundId: string): Promise<void>;
   replaceLedger(ledger: FinanceStore, persist?: boolean): Promise<void>;
   persistMarketQuotes(payload: MarketQuotesRequest): Promise<PersistedMarketQuotesResponse>;
-  refreshMarket(force?: boolean): Promise<void>;
+  refreshMarket(options?: RefreshMarketOptions): Promise<void>;
 }
 
 let writeQueue = Promise.resolve();
@@ -980,7 +984,6 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
           mergeMarketResponse(state.ledger, result.quotes);
         });
         await refreshWhenSettled(mutationVersion);
-        pushToast("success", "Đã cập nhật giá thị trường.");
         return result;
       } catch (error) {
         pendingRouteRefresh = false;
@@ -992,7 +995,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
       }
     },
 
-    async refreshMarket(force = false) {
+    async refreshMarket({ force = false, notifySuccess = true }: RefreshMarketOptions = {}) {
       const assets = get().fundOverview?.marketAssets ?? collectAssetsFromLoadedDetails(get().ledger);
       if (!assets.length) {
         set((state) => { state.marketMessage = "Chưa có mã tài sản để cập nhật."; });
@@ -1010,6 +1013,7 @@ export const useFinanceStore = create<FinanceState>()(immer((set, get) => {
             ? "Chưa cập nhật được một số giá thị trường."
             : `Giá thị trường cập nhật ${new Date(result.quotes.fetchedAt).toLocaleString("vi-VN")}.`;
         });
+        if (notifySuccess) pushToast("success", "Đã cập nhật giá thị trường.");
       } catch (error) {
         if (error instanceof UnauthorizedError) {
           return;

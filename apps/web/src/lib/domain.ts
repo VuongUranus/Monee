@@ -22,6 +22,7 @@ import {
   cleanMoney,
   createDefaultStore,
   ensureFinancialProfile,
+  goldCostBasisVnd,
   monthKey,
   normalizeStore,
 } from "@chi-tieu/shared";
@@ -481,7 +482,7 @@ export function holdingCostVnd(lot: HoldingLot, category: "stock" | "crypto"): n
 }
 
 export function goldLotCostVnd(lot: GoldLot): number {
-  return (Number(lot.chi) || 0) * (Number(lot.purchasePrice) || 0) + (Number(lot.feeVnd) || 0);
+  return goldCostBasisVnd(lot);
 }
 
 export function stockQuote(store: FinanceStore, lot: HoldingLot): StockQuote | undefined {

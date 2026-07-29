@@ -210,6 +210,10 @@ export const goldLots = pgTable("gold_lots", {
   manualPrice: decimal("manual_price"),
   purchasePrice: decimal("purchase_price"),
   feeVnd: decimal("fee_vnd"),
+  costBasisType: text("cost_basis_type"),
+  costBasisValueVnd: decimal("cost_basis_value_vnd"),
+  costBasisQuoteDate: date("cost_basis_quote_date"),
+  costBasisSource: text("cost_basis_source"),
   purchasedAt: date("purchased_at"),
   note: text("note"),
 }, (table) => [
@@ -219,6 +223,30 @@ export const goldLots = pgTable("gold_lots", {
     and (${table.manualPrice} is null or ${table.manualPrice} >= 0)
     and (${table.purchasePrice} is null or ${table.purchasePrice} >= 0)
     and (${table.feeVnd} is null or ${table.feeVnd} >= 0)
+    and (${table.costBasisValueVnd} is null or ${table.costBasisValueVnd} >= 0)
+  `),
+  check("gold_lots_cost_basis_valid", sql`
+    (
+      ${table.costBasisType} is null
+      and ${table.costBasisValueVnd} is null
+      and ${table.costBasisQuoteDate} is null
+      and ${table.costBasisSource} is null
+    ) or (
+      ${table.costBasisType} = 'unit_price'
+      and ${table.costBasisValueVnd} is not null
+      and ${table.costBasisQuoteDate} is null
+      and ${table.costBasisSource} is null
+    ) or (
+      ${table.costBasisType} = 'total_paid'
+      and ${table.costBasisValueVnd} is not null
+      and ${table.costBasisQuoteDate} is null
+      and ${table.costBasisSource} is null
+    ) or (
+      ${table.costBasisType} = 'historical'
+      and ${table.costBasisValueVnd} is not null
+      and ${table.costBasisQuoteDate} is not null
+      and ${table.costBasisSource} is not null
+    )
   `),
 ]);
 

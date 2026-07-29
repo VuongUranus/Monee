@@ -33,6 +33,7 @@ import type {
   TransactionQuery,
 } from "@chi-tieu/shared";
 import type { FinanceDatabase } from "./client.js";
+import { readGoldCostBasis } from "./gold-cost-basis.js";
 import * as schema from "./schema.js";
 import { readDebtSummary } from "./debt-queries.js";
 
@@ -574,6 +575,10 @@ export async function readFundMonthDetail(
            h.purchased_at as hold_purchased_at, h.note as hold_note, h.exchange, h.provider_id,
            g.position as gold_position, g.chi, g.manual_price as gold_manual_price,
            g.purchase_price as gold_purchase_price, g.fee_vnd as gold_fee_vnd,
+           g.cost_basis_type as gold_cost_basis_type,
+           g.cost_basis_value_vnd as gold_cost_basis_value_vnd,
+           g.cost_basis_quote_date as gold_cost_basis_quote_date,
+           g.cost_basis_source as gold_cost_basis_source,
            g.purchased_at as gold_purchased_at, g.note as gold_note
     from fund_months fm
     left join fund_month_details d on d.fund_month_id = fm.id
@@ -607,8 +612,15 @@ export async function readFundMonthDetail(
       lots: rows.filter((row) => row.chi !== null).map((row) => ({
         chi: asNumber(row.chi),
         manualPrice: row.gold_manual_price === null ? null : asNumber(row.gold_manual_price),
-        purchasePrice: row.gold_purchase_price === null ? null : asNumber(row.gold_purchase_price),
-        feeVnd: row.gold_fee_vnd === null ? null : asNumber(row.gold_fee_vnd),
+        costBasis: readGoldCostBasis({
+          chi: row.chi,
+          purchasePrice: row.gold_purchase_price,
+          feeVnd: row.gold_fee_vnd,
+          costBasisType: row.gold_cost_basis_type,
+          costBasisValueVnd: row.gold_cost_basis_value_vnd,
+          costBasisQuoteDate: row.gold_cost_basis_quote_date,
+          costBasisSource: row.gold_cost_basis_source,
+        }),
         ...(row.gold_purchased_at ? { purchasedAt: String(row.gold_purchased_at) } : {}),
         ...(row.gold_note !== null ? { note: String(row.gold_note) } : {}),
       })),

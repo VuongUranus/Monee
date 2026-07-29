@@ -3,6 +3,7 @@ import type {
   CryptoQuote,
   FxQuote,
   GoldQuote,
+  HistoricalGoldQuote,
   MarketAssetRequest,
   MarketQuotesRequest,
   MarketQuotesResponse,
@@ -11,8 +12,10 @@ import type {
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 export const QUOTE_TTL_MS = 10 * 60 * 1000;
+export const HISTORICAL_QUOTE_TTL_MS = DAY_MS;
 export const GOLD_GRAMS_PER_TROY_OUNCE = 31.1034768;
 export const GRAMS_PER_CHI = 3.75;
+export const HISTORICAL_GOLD_MIN_DATE = "1999-01-05";
 
 interface JsonResponse {
   ok: boolean;
@@ -22,15 +25,15 @@ interface JsonResponse {
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<JsonResponse>;
 
-interface MarketError extends Error {
+export interface MarketServiceError extends Error {
   code: string;
   status?: number;
   payload?: unknown;
   matches?: CryptoMatch[];
 }
 
-function marketError(code: string, message: string, extra: Partial<MarketError> = {}): MarketError {
-  const error = new Error(message) as MarketError;
+function marketError(code: string, message: string, extra: Partial<MarketServiceError> = {}): MarketServiceError {
+  const error = new Error(message) as MarketServiceError;
   error.code = code;
   Object.assign(error, extra);
   return error;
@@ -51,6 +54,10 @@ export function calculateGoldVndPerChi(xauUsdPerTroyOunce: number, usdVnd: numbe
   return (xauUsdPerTroyOunce * usdVnd * GRAMS_PER_CHI) / GOLD_GRAMS_PER_TROY_OUNCE;
 }
 
+export function calculateGoldVndPerChiFromTroyOunce(vndPerTroyOunce: number): number {
+  return (vndPerTroyOunce * GRAMS_PER_CHI) / GOLD_GRAMS_PER_TROY_OUNCE;
+}
+
 function assetKey(asset: MarketAssetRequest): string {
   const symbol = String(asset.symbol || "").trim().toUpperCase();
   if (asset.type === "stock") return `stock:${asset.exchange || "auto"}:${symbol}`;
@@ -60,16 +67,19 @@ function assetKey(asset: MarketAssetRequest): string {
 
 export interface MarketService {
   getQuotes(request?: Partial<MarketQuotesRequest>): Promise<MarketQuotesResponse>;
+  getHistoricalGoldQuote(date: string): Promise<HistoricalGoldQuote>;
 }
 
 interface MarketServiceOptions {
   fetchImpl?: FetchLike;
   now?: () => number;
+  timeZone?: string;
 }
 
 export function createMarketService({
   fetchImpl = globalThis.fetch as FetchLike,
   now = () => Date.now(),
+  timeZone = "Asia/Ho_Chi_Minh",
 }: MarketServiceOptions = {}): MarketService {
   if (typeof fetchImpl !== "function") throw new Error("Node.js 20+ is required to fetch market data.");
 
@@ -122,6 +132,51 @@ export function createMarketService({
     });
   }
 
+  function currentDate(): string {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(now()));
+    const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${value.year}-${value.month}-${value.day}`;
+  }
+
+  function validHistoricalDate(date: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+    const parsed = new Date(`${date}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime())
+      && parsed.toISOString().slice(0, 10) === date
+      && date >= HISTORICAL_GOLD_MIN_DATE
+      && date <= currentDate();
+  }
+
+  async function getHistoricalGoldQuote(date: string): Promise<HistoricalGoldQuote> {
+    if (!validHistoricalDate(date)) {
+      throw marketError(
+        "invalid_historical_date",
+        `Ngày mua phải từ ${HISTORICAL_GOLD_MIN_DATE} đến hôm nay.`,
+        { status: 400 },
+      );
+    }
+    return cached(`gold:history:${date}`, HISTORICAL_QUOTE_TTL_MS, false, async () => {
+      const url = `https://api.frankfurter.dev/v2/rate/XAU/VND?${new URLSearchParams({ date })}`;
+      const payload = await requestJson(url);
+      const vndPerTroyOunce = toNumber(payload?.rate);
+      if (String(payload?.date || "") !== date || !(vndPerTroyOunce > 0)) {
+        throw marketError("historical_gold_unavailable", "Nguồn chưa có giá vàng tham chiếu cho ngày đã chọn.");
+      }
+      return {
+        date,
+        vndPerTroyOunce,
+        vndPerChi: Math.round(calculateGoldVndPerChiFromTroyOunce(vndPerTroyOunce)),
+        source: "Frankfurter",
+        sourceUrl: "https://frankfurter.dev",
+      };
+    });
+  }
+
   function lastPriceFromRows(rows: unknown): number {
     const candidates = Array.isArray(rows) ? rows : [];
     for (const row of candidates) {
@@ -161,7 +216,7 @@ export function createMarketService({
       try {
         return await cached(key, QUOTE_TTL_MS, force, () => fetchStock(symbol, exchange));
       } catch (caught) {
-        const error = caught as MarketError;
+        const error = caught as MarketServiceError;
         if (error.code === "stock_exchange_unsupported") throw error;
         if (asset.exchange) throw error;
       }
@@ -232,7 +287,7 @@ export function createMarketService({
       try {
         result.fx = await getUsdVnd(force);
       } catch (caught) {
-        const error = caught as MarketError;
+        const error = caught as MarketServiceError;
         result.errors.push({ key: "fx:USDVND", code: error.code || "fx_failed", message: error.message });
       }
     }
@@ -249,7 +304,7 @@ export function createMarketService({
           result.crypto.push(await getCrypto(asset, force));
         }
       } catch (caught) {
-        const error = caught as MarketError;
+        const error = caught as MarketServiceError;
         if (error.code === "crypto_ambiguous" && error.matches) result.matches[key] = error.matches;
         result.errors.push({ key, code: error.code || "quote_failed", message: error.message });
       }
@@ -257,5 +312,5 @@ export function createMarketService({
     return result;
   }
 
-  return { getQuotes };
+  return { getQuotes, getHistoricalGoldQuote };
 }

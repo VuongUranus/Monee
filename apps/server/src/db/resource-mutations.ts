@@ -18,6 +18,7 @@ import type {
   Transaction,
 } from "@chi-tieu/shared";
 import type { FinanceDatabase } from "./client.js";
+import { writeGoldCostBasis } from "./gold-cost-basis.js";
 import * as schema from "./schema.js";
 import type {
   AssistantMutationCommand,
@@ -173,8 +174,7 @@ async function replaceFundDetail(
       position,
       chi: lot.chi,
       manualPrice: lot.manualPrice ?? null,
-      purchasePrice: lot.purchasePrice ?? null,
-      feeVnd: lot.feeVnd ?? null,
+      ...writeGoldCostBasis(lot),
       purchasedAt: lot.purchasedAt ?? null,
       note: lot.note ?? null,
     })));

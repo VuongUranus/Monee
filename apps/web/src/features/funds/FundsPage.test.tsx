@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { FundOverviewResponse, SharedFundView } from "@chi-tieu/shared";
+import type { FundOverviewResponse, HistoricalGoldQuote, SharedFundView } from "@chi-tieu/shared";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { blankYearWith, createDefaultStore } from "@/lib/domain";
@@ -13,6 +13,7 @@ vi.mock("@/components/Charts", () => ({
 
 describe("FundsPage", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     const ledger = createDefaultStore();
     ledger.funds = [{ id: "reserve", name: "Dự phòng", color: "#E4572E", cat: "saving" }];
     ledger.years["2026"] = blankYearWith(ledger.funds);
@@ -48,6 +49,7 @@ describe("FundsPage", () => {
     useFinanceStore.setState({
       ledger,
       fundOverview: overview,
+      fundDetails: {},
       selectedYear: 2026,
       selectedMonth: 6,
       loadFunds: vi.fn(async () => undefined),
@@ -156,5 +158,82 @@ describe("FundsPage", () => {
 
     expect(updateSharedFundMonth).not.toHaveBeenCalled();
     updateSharedFundMonth.mockRestore();
+  });
+
+  it("đổi cách tính vốn và không để response giá lịch sử cũ ghi đè", async () => {
+    const ledger = createDefaultStore();
+    ledger.funds = [{ id: "gold", name: "Vàng", color: "#c8963e", cat: "gold" }];
+    ledger.years["2026"] = blankYearWith(ledger.funds);
+    const overview: FundOverviewResponse = {
+      year: 2026,
+      month: 7,
+      note: "",
+      income: 0,
+      yearActiveMonths: 0,
+      allTimeActiveMonths: 0,
+      showGoals: false,
+      debt: ledger.financialProfile.debt,
+      funds: [{
+        ...ledger.funds[0]!,
+        fundPlan: 0,
+        openingBalance: 0,
+        yearGoal: 0,
+        allGoal: 0,
+        monthAmount: 0,
+        yearAmounts: new Array(12).fill(0),
+        yearTotal: 0,
+        allTimeTotal: 0,
+        contributionAmount: 0,
+        contributionCount: 0,
+      }],
+      marketAssets: [{ type: "gold" }],
+      market: ledger.market,
+    };
+    const deferred = new Map<string, (quote: HistoricalGoldQuote) => void>();
+    vi.spyOn(api, "historicalGoldQuote").mockImplementation((date) =>
+      new Promise((resolve) => deferred.set(date, resolve)));
+    useFinanceStore.setState({
+      ledger,
+      fundOverview: overview,
+      fundDetails: {
+        "gold:2026:7": { fundId: "gold", year: 2026, month: 7, amount: 0, detail: { type: "gold", lots: [] } },
+      },
+      selectedYear: 2026,
+      selectedMonth: 6,
+      loadFunds: vi.fn(async () => undefined),
+    });
+
+    render(<MemoryRouter><FundsPage /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: /Chỉnh chi tiết/ }));
+    const dialog = await screen.findByRole("dialog", { name: /Vàng/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "+ Thêm giao dịch" }));
+    const card = dialog.querySelector<HTMLElement>(".asset-lot-card")!;
+
+    fireEvent.click(within(card).getByRole("radio", { name: "Tổng tiền đã trả" }));
+    expect(within(card).getByLabelText("Tổng tiền đã trả vàng 1")).toBeInTheDocument();
+    expect(within(card).queryByLabelText("Giá mua vàng 1")).not.toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("radio", { name: "Tự động theo ngày mua" }));
+    const date = within(card).getByLabelText("Ngày mua vàng 1");
+    fireEvent.change(date, { target: { value: "2024-07-14" } });
+    fireEvent.change(date, { target: { value: "2024-07-15" } });
+
+    await act(async () => deferred.get("2024-07-15")?.({
+      date: "2024-07-15",
+      vndPerTroyOunce: 60_000_000,
+      vndPerChi: 7_200_000,
+      source: "Frankfurter",
+      sourceUrl: "https://frankfurter.dev",
+    }));
+    await waitFor(() => expect(within(card).getByLabelText("Giá vàng theo ngày 1")).toHaveValue("7,200,000đ"));
+
+    await act(async () => deferred.get("2024-07-14")?.({
+      date: "2024-07-14",
+      vndPerTroyOunce: 50_000_000,
+      vndPerChi: 6_000_000,
+      source: "Frankfurter",
+      sourceUrl: "https://frankfurter.dev",
+    }));
+    expect(within(card).getByLabelText("Giá vàng theo ngày 1")).toHaveValue("7,200,000đ");
   });
 });

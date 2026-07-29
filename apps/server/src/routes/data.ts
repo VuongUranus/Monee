@@ -19,6 +19,44 @@ const fundCategorySchema = z.enum(["saving", "stock", "gold", "crypto"]);
 const transactionTypeSchema = z.enum(["income", "expense"]);
 const debtKindSchema = z.enum(["borrowed", "lent", "credit_card", "installment"]);
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const goldCostBasisSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("unit_price"), vndPerChi: positiveMoney }),
+  z.object({ type: z.literal("total_paid"), totalVnd: positiveMoney }),
+  z.object({
+    type: z.literal("historical"),
+    vndPerChi: positiveMoney,
+    quoteDate: dateSchema,
+    source: z.string().trim().min(1).max(200),
+  }),
+]);
+const goldDetailSchema = z.object({
+  type: z.literal("gold"),
+  lots: z.array(z.object({
+    chi: money,
+    manualPrice: money.nullish(),
+    costBasis: goldCostBasisSchema.nullish(),
+    purchasedAt: dateSchema.optional(),
+    note: z.string().max(2_000).optional(),
+  })),
+}).superRefine((detail, context) => {
+  detail.lots.forEach((lot, index) => {
+    if (lot.costBasis?.type !== "historical") return;
+    if (lot.purchasedAt !== lot.costBasis.quoteDate) {
+      context.addIssue({
+        code: "custom",
+        path: ["lots", index, "costBasis", "quoteDate"],
+        message: "Ngày của giá tham chiếu phải trùng ngày mua.",
+      });
+    }
+  });
+});
+const holdingDetailSchema = z.custom<FundDetail>((value) =>
+  typeof value === "object" && value !== null && "type" in value && value.type === "hold");
+const fundDetailSchema = z.union([
+  z.null(),
+  goldDetailSchema,
+  holdingDetailSchema,
+]) as z.ZodType<FundDetail>;
 const transactionQuerySchema = z.object({
   from: dateSchema,
   to: dateSchema,
@@ -437,7 +475,7 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
     const parsed = body(z.object({
       expectedRevision: revision,
       amount: money,
-      detail: z.custom<FundDetail>((value) => value === null || (typeof value === "object" && value !== null && "type" in value)).optional(),
+      detail: fundDetailSchema.optional(),
     }), request.body);
     try {
       return await personal(app, userId, parsed.expectedRevision, {
@@ -894,7 +932,7 @@ export const dataRoutes: FastifyPluginAsync = async (app) => {
     const parsed = body(z.object({
       revision,
       amount: money,
-      detail: z.custom<FundDetail>((value) => value === null || (typeof value === "object" && value !== null && "type" in value)).optional(),
+      detail: fundDetailSchema.optional(),
     }), request.body);
     try {
       return await app.finance.repository.mutateSharedResource(

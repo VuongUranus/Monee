@@ -50,6 +50,13 @@
       "when": 1785136500000,
       "tag": "0006_debts",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785314316987,
+      "tag": "0007_gold_cost_basis",
+      "breakpoints": true
     }
   ]
 }

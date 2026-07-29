@@ -26,6 +26,7 @@ import type {
   FundMonthMutationRequest,
   FundOverviewResponse,
   FundPatchRequest,
+  HistoricalGoldQuote,
   MarketQuotesRequest,
   PersonalMutationResponse,
   PersistedMarketQuotesResponse,
@@ -314,4 +315,11 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, expectedRevision }),
   }),
+  historicalGoldQuote: (date: string, signal?: AbortSignal): Promise<HistoricalGoldQuote> =>
+    request(
+      `/api/market/gold/history?${new URLSearchParams({ date })}`,
+      signal ? { signal } : undefined,
+      true,
+      { notifyError: false },
+    ),
 };

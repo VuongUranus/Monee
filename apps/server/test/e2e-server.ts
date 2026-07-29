@@ -4,6 +4,7 @@ import type { StoredFinancePayload, UserProfile } from "@chi-tieu/shared";
 import { buildApp } from "../src/application.js";
 import { SESSION_TTL_MS } from "../src/lib/session.js";
 import type { AssistantService } from "../src/services/assistant.js";
+import type { MarketService } from "../src/services/market.js";
 import { createPostgresTestContext, seedUser } from "./postgres.js";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -91,6 +92,29 @@ const assistantService: AssistantService = {
   },
 };
 
+const marketService: MarketService = {
+  async getQuotes() {
+    return {
+      fetchedAt: new Date().toISOString(),
+      fx: null,
+      gold: null,
+      stocks: [],
+      crypto: [],
+      matches: {},
+      errors: [],
+    };
+  },
+  async getHistoricalGoldQuote(date) {
+    return {
+      date,
+      vndPerTroyOunce: 60_981_087,
+      vndPerChi: 7_352_203,
+      source: "Frankfurter",
+      sourceUrl: "https://frankfurter.dev",
+    };
+  },
+};
+
 const port = Number(process.env.E2E_PORT || 3107);
 const app = await buildApp({
   workspaceRoot,
@@ -102,6 +126,7 @@ const app = await buildApp({
     AI_ASSISTANT_ENABLED: "true",
   },
   assistantService,
+  marketService,
   logger: false,
 });
 

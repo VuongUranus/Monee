@@ -409,6 +409,20 @@ table .custom-select { max-width: 160px; font-size: 13px; }
 .asset-fields input { display: block; width: 100%; margin-top: 5px; text-transform: none; }
 .asset-fields input[readonly] { color: var(--muted); background: var(--surface); cursor: default; }
 .asset-fields .asset-note { grid-column: span 2; }
+.gold-cost-method { grid-column: 1 / -1; min-width: 0; margin: 1px 0 0; padding: 0; border: 0; }
+.gold-cost-method legend { margin-bottom: 6px; color: var(--muted); font-size: 10.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.gold-cost-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.gold-cost-options label { position: relative; color: var(--ink); font-size: 12px; font-weight: 650; letter-spacing: 0; text-transform: none; cursor: pointer; }
+.gold-cost-options input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.gold-cost-options span { display: block; padding: 7px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; }
+.gold-cost-options input:checked + span { color: #6b294a; background: #fbeaf2; border-color: #d99ab7; box-shadow: 0 0 0 1px #d99ab7; }
+.gold-cost-options input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 2px; }
+.gold-history-field { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.gold-history-field > span { grid-column: 1 / -1; margin: 0; }
+.gold-manual-price { margin-top: 11px; padding: 9px 11px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.gold-manual-price summary { color: var(--muted); font-size: 12px; font-weight: 650; cursor: pointer; }
+.gold-manual-price label { display: block; max-width: 340px; margin-top: 9px; color: var(--muted); font-size: 10.5px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.gold-manual-price input { display: block; width: 100%; margin-top: 5px; text-transform: none; }
 .asset-lot-metrics { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 20px; margin-top: 12px; padding-top: 11px; border-top: 1px dashed var(--line); text-align: right; }
 .asset-lot-metrics b { display: block; margin-top: 2px; color: var(--ink); font-size: 13px; font-variant-numeric: tabular-nums; }
 .asset-add { align-self: flex-start; }
@@ -506,6 +520,9 @@ table .custom-select { max-width: 160px; font-size: 13px; }
   .asset-summary > div:last-child { border-bottom: 0; }
   .asset-fields { grid-template-columns: 1fr; }
   .asset-fields .asset-note { grid-column: auto; }
+  .gold-history-field { grid-template-columns: 1fr; }
+  .gold-history-field > span { grid-column: auto; }
+  .gold-history-field .btn { justify-self: start; }
   .asset-lot-metrics { justify-content: space-between; text-align: left; }
   .manager-row, .category-row, .account-row, .account-type-row { grid-template-columns: auto 38px 1fr; }
   .manager-row .danger { grid-column: 3; }

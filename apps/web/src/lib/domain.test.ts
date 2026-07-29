@@ -207,9 +207,32 @@ describe("nghiệp vụ sổ tài chính", () => {
     store.market.fx = { usdVnd: 25_000, source: "test", fetchedAt: "2026-07-25T00:00:00.000Z" };
     store.market.gold = { symbol: "XAU", xauUsdPerTroyOunce: 3_000, vndPerChi: 7_500_000, source: "test", fetchedAt: "2026-07-25T00:00:00.000Z" };
     const crypto = { ticker: "BTC", qty: 0.2, manualPrice: 60_000, purchasePrice: 50_000, purchaseFxVnd: 24_000, feeVnd: 100_000 };
-    const gold = { chi: 2, manualPrice: 7_000_000, purchasePrice: 6_000_000, feeVnd: 50_000 };
+    const gold = { chi: 2, manualPrice: 7_000_000, costBasis: { type: "unit_price" as const, vndPerChi: 6_000_000 } };
     expect(holdingCostVnd(crypto, "crypto")).toBe(240_100_000);
-    expect(goldLotCostVnd(gold)).toBe(12_050_000);
+    expect(goldLotCostVnd(gold)).toBe(12_000_000);
+    expect(goldLotCostVnd({ chi: 2, costBasis: { type: "total_paid", totalVnd: 12_050_000 } })).toBe(12_050_000);
+    expect(goldLotCostVnd({
+      chi: 2,
+      purchasedAt: "2026-07-20",
+      costBasis: { type: "historical", vndPerChi: 6_100_000, quoteDate: "2026-07-20", source: "Frankfurter" },
+    })).toBe(12_200_000);
     expect(goldLotPriceVnd(store, gold)).toBe(7_500_000);
+  });
+
+  it("chuẩn hóa giá mua và phí vàng cũ thành đúng tổng tiền đã trả", () => {
+    const raw = createDefaultStore() as any;
+    raw.years["2026"].details.vang[0] = {
+      type: "gold",
+      lots: [{ chi: 2, purchasePrice: 6_000_000, feeVnd: 50_000 }],
+    };
+    const normalized = normalizeStore(raw);
+    expect(normalized.store.years["2026"]!.details.vang![0]).toEqual({
+      type: "gold",
+      lots: [{
+        chi: 2,
+        manualPrice: null,
+        costBasis: { type: "total_paid", totalVnd: 12_050_000 },
+      }],
+    });
   });
 });

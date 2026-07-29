@@ -62,6 +62,14 @@ interface Fund { id: string; name: string; color: string; cat: FundCategory; }
 interface FinanceCategory { id: string; name: string; color: string; budget?: number; }
 interface AccountType { id: string; name: string; }
 interface Account { id: string; name: string; typeId?: string; }
+type GoldCostBasis =
+  | { type: "unit_price"; vndPerChi: number }
+  | { type: "total_paid"; totalVnd: number }
+  | { type: "historical"; vndPerChi: number; quoteDate: string; source: string };
+interface GoldLot {
+  chi: number; manualPrice?: number | null; costBasis?: GoldCostBasis | null;
+  purchasedAt?: string; note?: string;
+}
 ```
 
 `FundDetail` là `null`, `{ "type": "hold", "lots": [...] }` cho cổ phiếu/crypto, hoặc `{ "type": "gold", "lots": [...] }` cho vàng. Chi tiết đầy đủ của lot được định nghĩa trong shared contract.
@@ -321,6 +329,22 @@ Các endpoint còn lại dùng body `revision` và response `{ data, revision }`
 | `DELETE /api/shared-funds/:id` | owner | — | `{ deletedId: id }` |
 
 ## Giá thị trường
+
+### `GET /api/market/gold/history?date=YYYY-MM-DD`
+
+Tra giá XAU/VND tham chiếu theo ngày mua từ Frankfurter. Endpoint yêu cầu đăng nhập, chỉ nhận ngày từ `1999-01-05` đến ngày hiện tại và không tạo workspace revision.
+
+```json
+{
+  "date": "2024-07-15",
+  "vndPerTroyOunce": 60981087,
+  "vndPerChi": 7352203,
+  "source": "Frankfurter",
+  "sourceUrl": "https://frankfurter.dev"
+}
+```
+
+Giá được quy đổi từ VND/troy ounce sang VND/chỉ và làm tròn đến 1 VND. Đây là giá XAU/VND tham chiếu, không phải giá bán lẻ SJC.
 
 ### `POST /api/market/quotes`
 

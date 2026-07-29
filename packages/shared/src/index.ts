@@ -65,13 +65,17 @@ export interface GoldDetail {
   lots: GoldLot[];
 }
 
+export type GoldCostBasis =
+  | { type: "unit_price"; vndPerChi: number }
+  | { type: "total_paid"; totalVnd: number }
+  | { type: "historical"; vndPerChi: number; quoteDate: string; source: string };
+
 export interface GoldLot {
   chi: number;
   /** Giá thị trường thủ công dự phòng, VND/chỉ. */
   manualPrice?: number | null;
-  /** Giá mua, VND/chỉ. */
-  purchasePrice?: number | null;
-  feeVnd?: number | null;
+  /** Cách tính vốn của giao dịch vàng. */
+  costBasis?: GoldCostBasis | null;
   purchasedAt?: string;
   note?: string;
 }
@@ -236,6 +240,14 @@ export interface GoldQuote {
   source: string;
   sourceUrl?: string;
   fetchedAt: string;
+}
+
+export interface HistoricalGoldQuote {
+  date: string;
+  vndPerTroyOunce: number;
+  vndPerChi: number;
+  source: string;
+  sourceUrl: string;
 }
 
 export interface StockQuote {
@@ -765,4 +777,5 @@ export interface UserDatabase {
 
 export * from "./normalization.js";
 export * from "./market-state.js";
+export * from "./gold.js";
 export * from "./debt.js";
