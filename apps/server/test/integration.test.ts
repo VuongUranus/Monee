@@ -548,6 +548,31 @@ describe("Fastify CRUD, sharing và market routes", () => {
     }
   });
 
+  it("tự động chuyển số dư tháng trước vào thu nhập khả dụng của tháng sau", async () => {
+    const initialData = createDefaultStore();
+    initialData.expense.txns.push(
+      { id: "salary-june", date: "2026-06-01", type: "income", cat: "salary", amount: 10_000_000, note: "Lương tháng 6" },
+      { id: "expense-june", date: "2026-06-15", type: "expense", cat: "food", amount: 3_000_000, note: "Chi tháng 6" },
+      { id: "salary-july", date: "2026-07-01", type: "income", cat: "salary", amount: 12_000_000, note: "Lương tháng 7" },
+    );
+    initialData.years["2026"]!.funds.dp![5] = 2_000_000;
+    const { app, cookie } = await createAuthenticatedApp({ initialData: initialData as unknown as StoredFinancePayload });
+    try {
+      const summary = (await app.inject({
+        method: "GET",
+        url: "/api/expenses/summary?year=2026&month=7",
+        headers: { cookie },
+      })).json();
+      expect(summary).toMatchObject({
+        income: 12_000_000,
+        carryOver: 5_000_000,
+        balance: 17_000_000,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("bootstrap nhỏ, phân trang giao dịch và tổng hợp chi tiêu/thống kê ở PostgreSQL", async () => {
     const initialData = createDefaultStore();
     initialData.years["2026"]!.funds.dp![6] = 1_000_000;

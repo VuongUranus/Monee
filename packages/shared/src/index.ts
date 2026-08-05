@@ -443,6 +443,8 @@ export interface ExpenseBreakdownEntry {
 export interface ExpenseMonthSummaryResponse {
   year: number;
   month: number;
+  /** Số dư còn lại từ tất cả các tháng trước, tự động chuyển sang tháng này. */
+  carryOver: number;
   income: number;
   spent: number;
   funds: number;

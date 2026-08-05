@@ -7,6 +7,7 @@ import {
   gte,
   ilike,
   inArray,
+  lt,
   lte,
   or,
   sql,
@@ -147,7 +148,7 @@ export async function readExpenseSummary(
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const next = new Date(Date.UTC(year, month, 1));
   const to = new Date(next.getTime() - 86_400_000).toISOString().slice(0, 10);
-  const [categoryTotals, accountTotals, fundTotals] = await Promise.all([
+  const [categoryTotals, accountTotals, fundTotals, priorTransactionTotals, priorFundTotals] = await Promise.all([
     db.select({
       type: schema.transactions.type,
       categoryId: schema.financeCategories.externalId,
@@ -182,6 +183,24 @@ export async function readExpenseSummary(
         eq(schema.fundMonths.year, year),
         eq(schema.fundMonths.month, month),
       )),
+    db.select({
+      income: sql<number>`coalesce(sum(case when ${schema.transactions.type} = 'income' then ${schema.transactions.amount} else 0 end), 0)`,
+      spent: sql<number>`coalesce(sum(case when ${schema.transactions.type} = 'expense' then ${schema.transactions.amount} else 0 end), 0)`,
+    }).from(schema.transactions)
+      .where(and(
+        eq(schema.transactions.userId, userId),
+        lt(schema.transactions.date, from),
+      )),
+    db.select({ amount: sql<number>`coalesce(sum(${schema.fundMonths.amount}), 0)` })
+      .from(schema.fundMonths)
+      .innerJoin(schema.funds, eq(schema.fundMonths.fundId, schema.funds.id))
+      .where(and(
+        eq(schema.funds.ownerId, userId),
+        or(
+          lt(schema.fundMonths.year, year),
+          and(eq(schema.fundMonths.year, year), lt(schema.fundMonths.month, month)),
+        ),
+      )),
   ]);
   const byExpenseCategory: Record<string, number> = {};
   const byIncomeCategory: Record<string, number> = {};
@@ -198,13 +217,17 @@ export async function readExpenseSummary(
     }
   }
   const funds = asNumber(fundTotals[0]?.amount);
+  const carryOver = asNumber(priorTransactionTotals[0]?.income)
+    - asNumber(priorTransactionTotals[0]?.spent)
+    - asNumber(priorFundTotals[0]?.amount);
   return {
     year,
     month,
+    carryOver,
     income,
     spent,
     funds,
-    balance: income - spent - funds,
+    balance: carryOver + income - spent - funds,
     byExpenseCategory,
     byIncomeCategory,
     accountExpenses: accountTotals.map((row, index) => ({

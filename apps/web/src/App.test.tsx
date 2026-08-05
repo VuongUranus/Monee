@@ -207,6 +207,7 @@ function expenseSummary(ledger: FinanceStore, year: number, month: number) {
   return {
     year,
     month,
+    carryOver: 0,
     income,
     spent,
     funds,

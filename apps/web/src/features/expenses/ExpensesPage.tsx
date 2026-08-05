@@ -137,6 +137,8 @@ export function ExpensesPage() {
 
   const transactions = transactionPage?.items ?? [];
   const income = expenseSummary?.income ?? 0;
+  const carryOver = expenseSummary?.carryOver ?? 0;
+  const availableIncome = income + carryOver;
   const spent = expenseSummary?.spent ?? 0;
   const funds = expenseSummary?.funds ?? 0;
   const balance = expenseSummary?.balance ?? 0;
@@ -193,8 +195,8 @@ export function ExpensesPage() {
       </div>
 
       <div className="stat-row stat-row-5">
-        <Stat label="Thu nhập" value={fmt(income)} meta="tổng các khoản thu" accent="green" />
-        <Stat label="Đã chi" value={fmt(spent)} meta={income ? `${Math.round(spent / income * 100)}% thu nhập` : "chưa có thu nhập"} accent="rust" />
+        <Stat label="Thu nhập" value={fmt(availableIncome)} meta={carryOver ? `gồm số dư chuyển sang ${fmt(carryOver)}` : "tổng các khoản thu"} accent="green" />
+        <Stat label="Đã chi" value={fmt(spent)} meta={availableIncome ? `${Math.round(spent / availableIncome * 100)}% thu nhập` : "chưa có thu nhập"} accent="rust" />
         <Stat label="Hạn mức" value={fmt(totalBudget)} meta={totalBudget ? (spent <= totalBudget ? `còn ${fmt(totalBudget - spent)}` : `vượt ${fmt(spent - totalBudget)}`) : "chưa đặt hạn mức"} accent="gold" />
         <Stat label="Trích quỹ" value={fmt(funds)} meta="tổng bỏ vào quỹ tháng này" accent="blue" />
         <Stat label="Số dư" value={fmt(balance)} meta="thu − chi − trích quỹ" accent={balance < 0 ? "rust" : "green"} />
@@ -262,7 +264,7 @@ export function ExpensesPage() {
                     <tr key={item.id}>
                       <td><span className="fund-tag" style={{ background: item.color }} />{item.name}</td>
                       <td>{fmt(value)}</td><td>{value ? fmt(value / daysInMonth) : "—"}</td>
-                      <td>{income ? `${(value / income * 100).toFixed(1)}%` : "0%"}</td>
+                      <td>{availableIncome ? `${(value / availableIncome * 100).toFixed(1)}%` : "0%"}</td>
                       <td>{budget ? fmt(budget) : "—"}</td>
                       <td className={danger ? "negative" : warning ? "warning" : ""}>{budget ? fmt(budget - value) : "—"}</td>
                       <td>{budget ? <>{Math.round(rawUsage)}%<div className="bar"><span style={{ width: `${usage}%`, background: danger ? "var(--rust)" : warning ? "var(--gold)" : item.color }} /></div></> : <span className="goal-cell">chưa đặt</span>}</td>
@@ -270,7 +272,7 @@ export function ExpensesPage() {
                   );
                 })}
               </tbody>
-              <tfoot><tr><td>Tổng cộng</td><td>{fmt(spent)}</td><td>{fmt(spent / daysInMonth)}</td><td>{income ? `${Math.round(spent / income * 100)}%` : "0%"}</td><td>{fmt(totalBudget)}</td><td>{fmt(totalBudget - spent)}</td><td /></tr></tfoot>
+              <tfoot><tr><td>Tổng cộng</td><td>{fmt(spent)}</td><td>{fmt(spent / daysInMonth)}</td><td>{availableIncome ? `${Math.round(spent / availableIncome * 100)}%` : "0%"}</td><td>{fmt(totalBudget)}</td><td>{fmt(totalBudget - spent)}</td><td /></tr></tfoot>
             </table>
           </div>
         </article>
